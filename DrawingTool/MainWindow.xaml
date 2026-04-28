@@ -1,0 +1,77 @@
+﻿<Window x:Class="DrawingTool.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Drawing Tool - Advanced Wire Routing" Height="700" Width="1050">
+    <DockPanel>
+        <ToolBar DockPanel.Dock="Top" Padding="10,5" Background="#EEEEEE">
+            <TextBlock Text="操作モード:" VerticalAlignment="Center" Margin="0,0,10,0" FontWeight="Bold"/>
+            <RadioButton Content="選択 / 移動 / 変形" Name="rbSelect" IsChecked="True" Margin="5"/>
+            <RadioButton Content="図形の描画 (配置)" Name="rbDraw" Margin="20,5,5,5"/>
+        </ToolBar>
+
+        <TabControl Name="RightTabControl" DockPanel.Dock="Right" Width="300" Margin="5">
+            <TabItem Header="図形選択">
+                <DockPanel Margin="5">
+                    <TextBlock Text="描画する図形（マスター）を選択：" DockPanel.Dock="Top" Margin="0,0,0,5"/>
+                    <ListBox Name="lstShapes" DisplayMemberPath="DisplayText"/>
+                </DockPanel>
+            </TabItem>
+            
+            <TabItem Header="図形定義">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="10">
+                        <TextBlock Text="新規図形の定義" FontWeight="Bold" FontSize="14" Margin="0,0,0,15"/>
+                        
+                        <TextBlock Text="図形番号 (ID):" Margin="0,0,0,2"/>
+                        <TextBox Name="txtShapeId" Text="LINE-WIRE-B" Margin="0,0,0,10" Padding="2"/>
+
+                        <TextBlock Text="種類:" Margin="0,0,0,2"/>
+                        <ComboBox Name="cmbShapeType" SelectedIndex="0" Margin="0,0,0,10" Padding="2" SelectionChanged="CmbShapeType_SelectionChanged">
+                            <ComboBoxItem Content="線分" Tag="Line"/>
+                            <ComboBoxItem Content="四角形" Tag="Rectangle"/>
+                            <ComboBoxItem Content="シンボル" Tag="Symbol"/>
+                        </ComboBox>
+
+                        <StackPanel Name="LineSettings" Visibility="Visible" Margin="0,0,0,15" Background="#FFF5F5">
+                            <TextBlock Text="線分の役割（タイプ）:" FontWeight="Bold" Margin="5,5,0,5"/>
+                            <RadioButton Name="rbLineNormal" Content="通常の線分 (スナップなし)" IsChecked="True" Margin="10,2,5,2"/>
+                            <RadioButton Name="rbLineWireA" Content="接続線A (ポートやバスに吸着)" Foreground="Blue" Margin="10,2,5,2"/>
+                            <RadioButton Name="rbLineWireB" Content="接続線B (Aの条件＋他の接続線Bにも吸着)" Foreground="DeepPink" Margin="10,2,5,2"/>
+                            <RadioButton Name="rbLineBus" Content="バス (中途への接続を受け入れる)" Foreground="Purple" Margin="10,2,5,5"/>
+                        </StackPanel>
+
+                        <StackPanel Name="SymbolSettings" Visibility="Collapsed">
+                            <TextBlock Text="シンボルサイズ (W/H):" Margin="0,0,0,2"/>
+                            <TextBox Name="txtFixedSize" Text="60" Margin="0,0,0,10" Padding="2" TextChanged="TxtFixedSize_TextChanged"/>
+
+                            <TextBlock Text="接続点の配置 (グリッドをクリック):" Margin="0,0,0,5" FontWeight="Bold"/>
+                            <Border BorderBrush="Gray" BorderThickness="1" HorizontalAlignment="Left" Background="White">
+                                <Canvas Name="EditorCanvas" Width="160" Height="160" MouseLeftButtonDown="EditorCanvas_MouseLeftButtonDown"/>
+                            </Border>
+                            <TextBlock Text="※青い点が接続点です。クリックで追加/削除" FontSize="10" Margin="0,5,0,15" Foreground="Gray"/>
+                        </StackPanel>
+
+                        <Button Content="この図形をマスターに登録" Click="BtnRegisterShape_Click" Padding="8" Background="#E0F0FF"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
+
+        <Canvas x:Name="DrawCanvas" MouseLeftButtonDown="Canvas_MouseLeftButtonDown" MouseMove="Canvas_MouseMove" MouseLeftButtonUp="Canvas_MouseLeftButtonUp">
+            <Canvas.Background>
+                <DrawingBrush TileMode="Tile" Viewport="0,0,20,20" ViewportUnits="Absolute">
+                    <DrawingBrush.Drawing>
+                        <GeometryDrawing>
+                            <GeometryDrawing.Geometry>
+                                <GeometryGroup>
+                                    <LineGeometry StartPoint="0,0" EndPoint="20,0"/><LineGeometry StartPoint="0,0" EndPoint="0,20"/>
+                                </GeometryGroup>
+                            </GeometryDrawing.Geometry>
+                            <GeometryDrawing.Pen><Pen Brush="LightGray" Thickness="0.5" /></GeometryDrawing.Pen>
+                        </GeometryDrawing>
+                    </DrawingBrush.Drawing>
+                </DrawingBrush>
+            </Canvas.Background>
+        </Canvas>
+    </DockPanel>
+</Window>
