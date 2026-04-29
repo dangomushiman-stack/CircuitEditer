@@ -16,6 +16,34 @@
                     <ListBox Name="lstShapes" DisplayMemberPath="DisplayText"/>
                 </DockPanel>
             </TabItem>
+
+            <TabItem Header="シンボル一覧">
+                <Grid Margin="5">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0"
+                               Text="定義済みシンボル（入力・登録したマスター）："
+                               Margin="0,0,0,5"
+                               FontWeight="Bold"/>
+                    <ListBox Grid.Row="1"
+                             Name="lstRegisteredSymbols"
+                             DisplayMemberPath="DisplayText"
+                             SelectionChanged="LstRegisteredSymbols_SelectionChanged"/>
+
+                    <TextBlock Grid.Row="2"
+                               Text="現在編集中のデータに配置済みの図形："
+                               Margin="0,10,0,5"
+                               FontWeight="Bold"/>
+                    <ListBox Grid.Row="3"
+                             Name="lstPlacedSymbols"
+                             DisplayMemberPath="DisplayText"/>
+                </Grid>
+            </TabItem>
             
             <TabItem Header="図形定義">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -37,12 +65,14 @@
                             <RadioButton Name="rbLineNormal" Content="通常の線分 (スナップなし)" IsChecked="True" Margin="10,2,5,2"/>
                             <RadioButton Name="rbLineWireA" Content="接続線A (ポートやバスに吸着)" Foreground="Blue" Margin="10,2,5,2"/>
                             <RadioButton Name="rbLineWireB" Content="接続線B (Aの条件＋他の接続線Bにも吸着)" Foreground="DeepPink" Margin="10,2,5,2"/>
+                            <RadioButton Name="rbLineWireC" Content="接続線C (線に結合して相手線を分割)" Foreground="DarkCyan" Margin="10,2,5,2"/>
                             <RadioButton Name="rbLineBus" Content="バス (中途への接続を受け入れる)" Foreground="Purple" Margin="10,2,5,5"/>
                         </StackPanel>
 
                         <StackPanel Name="SymbolSettings" Visibility="Collapsed">
-                            <TextBlock Text="シンボルサイズ (W/H):" Margin="0,0,0,2"/>
-                            <TextBox Name="txtFixedSize" Text="60" Margin="0,0,0,10" Padding="2" TextChanged="TxtFixedSize_TextChanged"/>
+                            <TextBlock Text="シンボル幅（グリッド数）:" Margin="0,0,0,2"/>
+                            <TextBox Name="txtSymbolGridCount" Text="3" Margin="0,0,0,4" Padding="2" TextChanged="TxtSymbolGridCount_TextChanged"/>
+                            <TextBlock Text="例: 3 → 3×20 = 60px / 5 → 5×20 = 100px" FontSize="10" Margin="0,0,0,10" Foreground="Gray"/>
 
                             <TextBlock Text="接続点の配置 (グリッドをクリック):" Margin="0,0,0,5" FontWeight="Bold"/>
                             <Border BorderBrush="Gray" BorderThickness="1" HorizontalAlignment="Left" Background="White">
