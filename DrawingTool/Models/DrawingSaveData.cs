@@ -20,6 +20,16 @@ namespace DrawingTool.Models
         public int GridHeightCount { get; set; }
         public string LineRole { get; set; } = "";
         public List<SavedPoint> ConnectionPoints { get; set; } = new List<SavedPoint>();
+        public List<SavedSymbolVectorElement> VectorElements { get; set; } = new List<SavedSymbolVectorElement>();
+    }
+
+    public class SavedSymbolVectorElement
+    {
+        public string Type { get; set; } = "";
+        public double X1 { get; set; }
+        public double Y1 { get; set; }
+        public double X2 { get; set; }
+        public double Y2 { get; set; }
     }
 
     public class SavedDrawingItem
@@ -33,6 +43,7 @@ namespace DrawingTool.Models
         public double Y2 { get; set; }
         public double Width { get; set; }
         public double Height { get; set; }
+        public List<SavedSymbolVectorElement> VectorElements { get; set; } = new List<SavedSymbolVectorElement>();
         public int? StartNodeId { get; set; }
         public int? EndNodeId { get; set; }
         public SavedLineEndpointConnection? StartConnection { get; set; }

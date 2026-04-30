@@ -35,7 +35,12 @@ namespace DrawingTool
         private Rectangle selectionBox;
         private Line selectionLineHighlight;
         private Rectangle rectResizeHandle, lineStartHandle, lineEndHandle, activeHandle;
+        private bool isDrawingEditorVector = false;
+        private bool isLoadingSymbolDefinition = false;
+        private Point editorVectorStart;
+        private SymbolVectorElement editorVectorPreview = null;
         private const int GridSize = 20;
+        private const int VectorGridSize = 5;
 
         private int GetSymbolGridWidthCount()
         {
@@ -122,7 +127,10 @@ namespace DrawingTool
             double height = GetSymbolFixedHeight();
             var guide = new Rectangle { Width = width, Height = height, Stroke = Brushes.LightBlue, StrokeDashArray = new DoubleCollection { 2, 2 } };
             Canvas.SetLeft(guide, 10); Canvas.SetTop(guide, 10); EditorCanvas.Children.Add(guide);
+            for (double x = 0; x <= width; x += VectorGridSize) { for (double y = 0; y <= height; y += VectorGridSize) { var dot = new Ellipse { Width = 2, Height = 2, Fill = Brushes.Gainsboro }; Canvas.SetLeft(dot, x + 10 - 1); Canvas.SetTop(dot, y + 10 - 1); EditorCanvas.Children.Add(dot); } }
             for (double x = 0; x <= width; x += GridSize) { for (double y = 0; y <= height; y += GridSize) { var dot = new Ellipse { Width = 4, Height = 4, Fill = Brushes.LightGray }; Canvas.SetLeft(dot, x + 10 - 2); Canvas.SetTop(dot, y + 10 - 2); EditorCanvas.Children.Add(dot); } }
+            foreach (var vectorElement in viewModel.TempVectorElements) { AddVectorElementToCanvas(EditorCanvas, vectorElement, 10, Brushes.Black, 2, 1); }
+            if (editorVectorPreview != null) { AddVectorElementToCanvas(EditorCanvas, editorVectorPreview, 10, Brushes.DarkGreen, 2, 0.65); }
             foreach (var p in viewModel.TempConnectionPoints) { var connDot = new Ellipse { Width = 8, Height = 8, Fill = Brushes.Blue, Stroke = Brushes.White, StrokeThickness = 1 }; Canvas.SetLeft(connDot, p.X + 10 - 4); Canvas.SetTop(connDot, p.Y + 10 - 4); EditorCanvas.Children.Add(connDot); }
         }
 
@@ -188,12 +196,193 @@ namespace DrawingTool
         }
 
         private void EditorCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) {
-            Point p = e.GetPosition(EditorCanvas); double width = GetSymbolFixedWidth(); double height = GetSymbolFixedHeight();
-            double relX = Math.Round((p.X - 10) / GridSize) * GridSize; double relY = Math.Round((p.Y - 10) / GridSize) * GridSize;
-            if (relX >= 0 && relX <= width && relY >= 0 && relY <= height) { Point newPoint = new Point(relX, relY); if (viewModel.TempConnectionPoints.Any(pt => pt == newPoint)) viewModel.TempConnectionPoints.Remove(newPoint); else viewModel.TempConnectionPoints.Add(newPoint); RefreshEditor(); }
+            Point newPoint = GetEditorGridPoint(e.GetPosition(EditorCanvas));
+            if (!IsPointInsideSymbolEditor(newPoint)) return;
+
+            if (rbEditorVector.IsChecked == true)
+            {
+                editorVectorStart = newPoint;
+                editorVectorPreview = CreateEditorVectorElement(editorVectorStart, newPoint);
+                isDrawingEditorVector = true;
+                EditorCanvas.CaptureMouse();
+                RefreshEditor();
+                return;
+            }
+
+            if (viewModel.TempConnectionPoints.Any(pt => pt == newPoint)) viewModel.TempConnectionPoints.Remove(newPoint); else viewModel.TempConnectionPoints.Add(newPoint);
+            RefreshEditor();
         }
 
-        private void TxtSymbolGridCount_TextChanged(object sender, TextChangedEventArgs e) { viewModel.ClearTempConnectionPoints(); RefreshEditor(); }
+        private void EditorCanvas_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (!isDrawingEditorVector)
+            {
+                return;
+            }
+
+            Point endPoint = GetEditorGridPoint(e.GetPosition(EditorCanvas));
+            endPoint = ClampPointToSymbolEditor(endPoint);
+            editorVectorPreview = CreateEditorVectorElement(editorVectorStart, endPoint);
+            RefreshEditor();
+        }
+
+        private void EditorCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (!isDrawingEditorVector)
+            {
+                return;
+            }
+
+            Point endPoint = ClampPointToSymbolEditor(GetEditorGridPoint(e.GetPosition(EditorCanvas)));
+            var vectorElement = CreateEditorVectorElement(editorVectorStart, endPoint);
+            if (HasVectorElementSize(vectorElement))
+            {
+                viewModel.TempVectorElements.Add(vectorElement);
+            }
+
+            isDrawingEditorVector = false;
+            editorVectorPreview = null;
+            EditorCanvas.ReleaseMouseCapture();
+            RefreshEditor();
+        }
+
+        private void BtnUndoVector_Click(object sender, RoutedEventArgs e)
+        {
+            if (viewModel.TempVectorElements.Count == 0)
+            {
+                return;
+            }
+
+            viewModel.TempVectorElements.RemoveAt(viewModel.TempVectorElements.Count - 1);
+            RefreshEditor();
+        }
+
+        private void BtnClearVector_Click(object sender, RoutedEventArgs e)
+        {
+            viewModel.ClearTempVectorElements();
+            RefreshEditor();
+        }
+
+        private Point GetEditorGridPoint(Point editorPoint)
+        {
+            int gridSize = rbEditorVector?.IsChecked == true ? VectorGridSize : GridSize;
+            return GetEditorGridPoint(editorPoint, gridSize);
+        }
+
+        private Point GetEditorGridPoint(Point editorPoint, int gridSize)
+        {
+            return new Point(
+                Math.Round((editorPoint.X - 10) / gridSize) * gridSize,
+                Math.Round((editorPoint.Y - 10) / gridSize) * gridSize);
+        }
+
+        private bool IsPointInsideSymbolEditor(Point point)
+        {
+            return point.X >= 0 &&
+                   point.X <= GetSymbolFixedWidth() &&
+                   point.Y >= 0 &&
+                   point.Y <= GetSymbolFixedHeight();
+        }
+
+        private Point ClampPointToSymbolEditor(Point point)
+        {
+            return new Point(
+                Math.Max(0, Math.Min(GetSymbolFixedWidth(), point.X)),
+                Math.Max(0, Math.Min(GetSymbolFixedHeight(), point.Y)));
+        }
+
+        private SymbolVectorElement CreateEditorVectorElement(Point start, Point end)
+        {
+            string type = "Line";
+            if (cmbVectorShape?.SelectedItem is ComboBoxItem item && item.Tag is string selectedType)
+            {
+                type = selectedType;
+            }
+
+            return new SymbolVectorElement
+            {
+                Type = type,
+                X1 = start.X,
+                Y1 = start.Y,
+                X2 = end.X,
+                Y2 = end.Y
+            };
+        }
+
+        private bool HasVectorElementSize(SymbolVectorElement element)
+        {
+            return Math.Abs(element.X1 - element.X2) >= VectorGridSize ||
+                   Math.Abs(element.Y1 - element.Y2) >= VectorGridSize;
+        }
+
+        private void AddVectorElementToCanvas(Canvas canvas, SymbolVectorElement element, double offset, Brush stroke, double strokeThickness, double opacity)
+        {
+            Shape shape;
+            double left = Math.Min(element.X1, element.X2) + offset;
+            double top = Math.Min(element.Y1, element.Y2) + offset;
+            double width = Math.Abs(element.X1 - element.X2);
+            double height = Math.Abs(element.Y1 - element.Y2);
+
+            if (element.Type == "Rectangle")
+            {
+                shape = new Rectangle
+                {
+                    Width = Math.Max(1, width),
+                    Height = Math.Max(1, height),
+                    Stroke = stroke,
+                    StrokeThickness = strokeThickness,
+                    Fill = Brushes.Transparent,
+                    Opacity = opacity
+                };
+                Canvas.SetLeft(shape, left);
+                Canvas.SetTop(shape, top);
+            }
+            else if (element.Type == "Ellipse")
+            {
+                shape = new Ellipse
+                {
+                    Width = Math.Max(1, width),
+                    Height = Math.Max(1, height),
+                    Stroke = stroke,
+                    StrokeThickness = strokeThickness,
+                    Fill = Brushes.Transparent,
+                    Opacity = opacity
+                };
+                Canvas.SetLeft(shape, left);
+                Canvas.SetTop(shape, top);
+            }
+            else
+            {
+                shape = new Line
+                {
+                    X1 = element.X1 + offset,
+                    Y1 = element.Y1 + offset,
+                    X2 = element.X2 + offset,
+                    Y2 = element.Y2 + offset,
+                    Stroke = stroke,
+                    StrokeThickness = strokeThickness,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Round,
+                    Opacity = opacity
+                };
+            }
+
+            shape.IsHitTestVisible = false;
+            canvas.Children.Add(shape);
+        }
+
+        private void TxtSymbolGridCount_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (isLoadingSymbolDefinition)
+            {
+                RefreshEditor();
+                return;
+            }
+
+            viewModel.ClearTempConnectionPoints();
+            viewModel.ClearTempVectorElements();
+            RefreshEditor();
+        }
         
         private void CmbShapeType_SelectionChanged(object sender, SelectionChangedEventArgs e) { 
             if (SymbolSettings == null || LineSettings == null) return;
@@ -237,6 +426,82 @@ namespace DrawingTool
             {
                 lstShapes.SelectedItem = def;
             }
+        }
+
+        private void BtnLoadSelectedSymbol_Click(object sender, RoutedEventArgs e)
+        {
+            if (lstRegisteredSymbols.SelectedItem is not ShapeDefinition definition)
+            {
+                MessageBox.Show(this, "編集するシンボルをシンボル一覧で選択してください。", "シンボル編集", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            LoadSymbolDefinitionToEditor(definition);
+        }
+
+        private void BtnUpdateSelectedSymbol_Click(object sender, RoutedEventArgs e)
+        {
+            if (lstRegisteredSymbols.SelectedItem is not ShapeDefinition definition)
+            {
+                MessageBox.Show(this, "更新するシンボルをシンボル一覧で選択してください。", "シンボル編集", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            UpdateSymbolDefinitionFromEditor(definition);
+            RebuildPlacedSymbolsForDefinition(definition);
+            lstRegisteredSymbols.Items.Refresh();
+            lstShapes.Items.Refresh();
+            RefreshPlacedSymbols();
+        }
+
+        private void LoadSymbolDefinitionToEditor(ShapeDefinition definition)
+        {
+            isLoadingSymbolDefinition = true;
+            try
+            {
+                txtShapeId.Text = definition.Id;
+                cmbShapeType.SelectedIndex = 2;
+                txtSymbolGridCount.Text = Math.Max(1, definition.GridWidthCount).ToString();
+                txtSymbolGridHeightCount.Text = Math.Max(1, definition.GridHeightCount).ToString();
+
+                viewModel.TempConnectionPoints.Clear();
+                viewModel.TempConnectionPoints.AddRange(definition.ConnectionPoints);
+                viewModel.TempVectorElements.Clear();
+                viewModel.TempVectorElements.AddRange(definition.VectorElements.Select(CloneVectorElement));
+                rbEditorPorts.IsChecked = true;
+            }
+            finally
+            {
+                isLoadingSymbolDefinition = false;
+            }
+
+            RightTabControl.SelectedIndex = 2;
+            RefreshEditor();
+        }
+
+        private void UpdateSymbolDefinitionFromEditor(ShapeDefinition definition)
+        {
+            definition.Id = txtShapeId.Text;
+            definition.Type = "Symbol";
+            definition.FixedSize = GetSymbolFixedWidth();
+            definition.FixedHeight = GetSymbolFixedHeight();
+            definition.GridWidthCount = GetSymbolGridWidthCount();
+            definition.GridHeightCount = GetSymbolGridHeightCount();
+            definition.ConnectionPoints = new List<Point>(viewModel.TempConnectionPoints);
+            definition.VectorElements = viewModel.TempVectorElements.Select(CloneVectorElement).ToList();
+            definition.LineRole = LineRoleType.Normal;
+        }
+
+        private SymbolVectorElement CloneVectorElement(SymbolVectorElement element)
+        {
+            return new SymbolVectorElement
+            {
+                Type = element.Type,
+                X1 = element.X1,
+                Y1 = element.Y1,
+                X2 = element.X2,
+                Y2 = element.Y2
+            };
         }
 
         private void BtnDeleteSelected_Click(object sender, RoutedEventArgs e)
@@ -426,7 +691,34 @@ namespace DrawingTool
                 LineRole = lineRole,
                 ConnectionPoints = savedDefinition.ConnectionPoints
                     .Select(point => new Point(point.X, point.Y))
+                    .ToList(),
+                VectorElements = savedDefinition.VectorElements
+                    .Select(CreateVectorElement)
                     .ToList()
+            };
+        }
+
+        private SymbolVectorElement CreateVectorElement(SavedSymbolVectorElement element)
+        {
+            return new SymbolVectorElement
+            {
+                Type = element.Type,
+                X1 = element.X1,
+                Y1 = element.Y1,
+                X2 = element.X2,
+                Y2 = element.Y2
+            };
+        }
+
+        private SavedSymbolVectorElement CreateSavedVectorElement(SymbolVectorElement element)
+        {
+            return new SavedSymbolVectorElement
+            {
+                Type = element.Type,
+                X1 = element.X1,
+                Y1 = element.Y1,
+                X2 = element.X2,
+                Y2 = element.Y2
             };
         }
 
@@ -455,6 +747,11 @@ namespace DrawingTool
 
             if (item.Type == "Symbol")
             {
+                if (definition.VectorElements.Count == 0 && item.VectorElements.Count > 0)
+                {
+                    definition.VectorElements = item.VectorElements.Select(CreateVectorElement).ToList();
+                }
+
                 return CreateSymbolElement(definition, item.X, item.Y, item.Width, item.Height);
             }
 
@@ -482,6 +779,16 @@ namespace DrawingTool
             double symbolWidth = width > 0 ? width : definition.FixedSize;
             double symbolHeight = height > 0 ? height : (definition.FixedHeight > 0 ? definition.FixedHeight : definition.FixedSize);
             var symbol = new Canvas { Width = symbolWidth, Height = symbolHeight, Tag = definition };
+            PopulateSymbolCanvas(symbol, definition, symbolWidth, symbolHeight);
+
+            Canvas.SetLeft(symbol, x);
+            Canvas.SetTop(symbol, y);
+            return symbol;
+        }
+
+        private void PopulateSymbolCanvas(Canvas symbol, ShapeDefinition definition, double symbolWidth, double symbolHeight)
+        {
+            symbol.Children.Clear();
             symbol.Children.Add(new Rectangle
             {
                 Width = symbolWidth,
@@ -490,6 +797,11 @@ namespace DrawingTool
                 StrokeThickness = 2,
                 Fill = Brushes.Orange
             });
+
+            foreach (var vectorElement in definition.VectorElements)
+            {
+                AddVectorElementToCanvas(symbol, vectorElement, 0, Brushes.Black, 2, 1);
+            }
 
             foreach (var connectionPoint in definition.ConnectionPoints)
             {
@@ -505,10 +817,22 @@ namespace DrawingTool
                 Canvas.SetTop(dot, connectionPoint.Y - 3);
                 symbol.Children.Add(dot);
             }
+        }
 
-            Canvas.SetLeft(symbol, x);
-            Canvas.SetTop(symbol, y);
-            return symbol;
+        private void RebuildPlacedSymbolsForDefinition(ShapeDefinition definition)
+        {
+            foreach (UIElement element in DrawCanvas.Children)
+            {
+                if (element is not Canvas symbol || !ReferenceEquals(symbol.Tag, definition))
+                {
+                    continue;
+                }
+
+                symbol.Width = definition.FixedSize;
+                symbol.Height = definition.FixedHeight > 0 ? definition.FixedHeight : definition.FixedSize;
+                PopulateSymbolCanvas(symbol, definition, symbol.Width, symbol.Height);
+                UpdateConnectedLines(symbol);
+            }
         }
 
         private void RestoreLineConnections(DrawingSaveData saveData, Dictionary<int, UIElement> elementsByItemNo)
@@ -606,6 +930,9 @@ namespace DrawingTool
                     LineRole = definition.LineRole.ToString(),
                     ConnectionPoints = definition.ConnectionPoints
                         .Select(point => new SavedPoint { X = point.X, Y = point.Y })
+                        .ToList(),
+                    VectorElements = definition.VectorElements
+                        .Select(CreateSavedVectorElement)
                         .ToList()
                 });
             }
@@ -668,6 +995,9 @@ namespace DrawingTool
                 item.Y = Canvas.GetTop(canvas);
                 item.Width = canvas.Width;
                 item.Height = canvas.Height;
+                item.VectorElements = definition.VectorElements
+                    .Select(CreateSavedVectorElement)
+                    .ToList();
             }
             else if (element is Rectangle rectangle)
             {
@@ -1284,15 +1614,7 @@ namespace DrawingTool
                     Canvas.SetLeft(r, startPoint.X); Canvas.SetTop(r, startPoint.Y); currentElement = r; DrawCanvas.Children.Add(r); isDrawingOrMoving = true;
                 }
                 else if (def.Type == "Symbol") {
-                    double symbolWidth = def.FixedSize;
-                    double symbolHeight = def.FixedHeight > 0 ? def.FixedHeight : def.FixedSize;
-                    var sym = new Canvas { Width = symbolWidth, Height = symbolHeight, Tag = def };
-                    sym.Children.Add(new Rectangle { Width = symbolWidth, Height = symbolHeight, Stroke = Brushes.DarkOrange, StrokeThickness = 2, Fill = Brushes.Orange });
-                    foreach (var cp in def.ConnectionPoints) {
-                        var dot = new Ellipse { Width = 6, Height = 6, Fill = Brushes.Blue, Stroke = Brushes.White, StrokeThickness = 1 };
-                        Canvas.SetLeft(dot, cp.X - 3); Canvas.SetTop(dot, cp.Y - 3); sym.Children.Add(dot);
-                    }
-                    Canvas.SetLeft(sym, startPoint.X); Canvas.SetTop(sym, startPoint.Y);
+                    var sym = CreateSymbolElement(def, startPoint.X, startPoint.Y, def.FixedSize, def.FixedHeight);
                     DrawCanvas.Children.Add(sym);
                     RefreshPlacedSymbols();
                 }

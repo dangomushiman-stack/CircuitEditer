@@ -12,6 +12,7 @@ namespace DrawingTool.ViewModels
         public ObservableCollection<ShapeDefinition> RegisteredSymbols { get; } = new ObservableCollection<ShapeDefinition>();
         public ObservableCollection<PlacedDrawingInfo> PlacedSymbols { get; } = new ObservableCollection<PlacedDrawingInfo>();
         public List<Point> TempConnectionPoints { get; } = new List<Point>();
+        public List<SymbolVectorElement> TempVectorElements { get; } = new List<SymbolVectorElement>();
 
         private ShapeDefinition? selectedShape;
         private ShapeDefinition? selectedRegisteredSymbol;
@@ -49,6 +50,16 @@ namespace DrawingTool.ViewModels
                 GridWidthCount = gridWidthCount,
                 GridHeightCount = gridHeightCount,
                 ConnectionPoints = new List<Point>(TempConnectionPoints),
+                VectorElements = TempVectorElements
+                    .Select(element => new SymbolVectorElement
+                    {
+                        Type = element.Type,
+                        X1 = element.X1,
+                        Y1 = element.Y1,
+                        X2 = element.X2,
+                        Y2 = element.Y2
+                    })
+                    .ToList(),
                 LineRole = lineRole
             };
 
@@ -66,6 +77,11 @@ namespace DrawingTool.ViewModels
         public void ClearTempConnectionPoints()
         {
             TempConnectionPoints.Clear();
+        }
+
+        public void ClearTempVectorElements()
+        {
+            TempVectorElements.Clear();
         }
 
         public void RefreshPlacedDrawings(IEnumerable<PlacedDrawingInfo> drawings)
