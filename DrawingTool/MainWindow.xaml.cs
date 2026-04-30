@@ -1,92 +1,39 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using DrawingTool.Models;
+using DrawingTool.ViewModels;
+using Microsoft.Win32;
 
 namespace DrawingTool
 {
-    // ★役割を5種類に拡張
-    public enum LineRoleType { Normal, WireA, WireB, WireC, Bus }
-
-    public class ShapeDefinition
-    {
-        public string Id { get; set; } = "";
-        public string Type { get; set; } = "";
-        public bool IsResizable => Type != "Symbol";
-        public double FixedSize { get; set; }
-        public int GridWidthCount { get; set; } = 3;
-        public List<Point> ConnectionPoints { get; set; } = new List<Point>();
-        
-        public LineRoleType LineRole { get; set; } = LineRoleType.Normal;
-
-        public string DisplayText => $"[{Id}] {Type}" + 
-            (Type == "Symbol" ? $" ({GridWidthCount}×{GridWidthCount}グリッド / {ConnectionPoints.Count}点)" : "") +
-            (Type == "Line" && LineRole == LineRoleType.WireA ? " (接続線A)" : "") +
-            (Type == "Line" && LineRole == LineRoleType.WireB ? " (接続線B)" : "") +
-            (Type == "Line" && LineRole == LineRoleType.WireC ? " (接続線C)" : "") +
-            (Type == "Line" && LineRole == LineRoleType.Bus ? " (バス)" : "");
-    }
-
-    public class PlacedDrawingInfo
-    {
-        public int No { get; set; }
-        public string Id { get; set; } = "";
-        public string Type { get; set; } = "";
-        public double X { get; set; }
-        public double Y { get; set; }
-        public double X2 { get; set; }
-        public double Y2 { get; set; }
-        public double Width { get; set; }
-        public double Height { get; set; }
-        public double Size { get; set; }
-        public int GridWidthCount { get; set; }
-        public int ConnectionPointCount { get; set; }
-
-        public string DisplayText
-        {
-            get
-            {
-                if (Type == "Line")
-                    return $"{No}: [{Id}] 線分 X1={X}, Y1={Y}, X2={X2}, Y2={Y2}";
-
-                if (Type == "Rectangle")
-                    return $"{No}: [{Id}] 四角形 X={X}, Y={Y}, W={Width}, H={Height}";
-
-                return $"{No}: [{Id}] シンボル X={X}, Y={Y}, Grid={GridWidthCount}×{GridWidthCount}, Size={Size}, 接続点={ConnectionPointCount}";
-            }
-        }
-    }
-
-    public class LineConnectionInfo
-    {
-        public UIElement StartElement { get; set; }
-        public Point StartRelPoint { get; set; }
-        public double StartLineRatio { get; set; }
-
-        public UIElement EndElement { get; set; }
-        public Point EndRelPoint { get; set; }
-        public double EndLineRatio { get; set; }
-    }
-
     public partial class MainWindow : Window
     {
-        public ObservableCollection<ShapeDefinition> RegisteredShapes { get; set; } = new ObservableCollection<ShapeDefinition>();
-        public ObservableCollection<ShapeDefinition> RegisteredSymbols { get; set; } = new ObservableCollection<ShapeDefinition>();
-        public ObservableCollection<PlacedDrawingInfo> PlacedSymbols { get; set; } = new ObservableCollection<PlacedDrawingInfo>();
+        private class ConnectionNode
+        {
+            public Point Position { get; set; }
+            public List<(Line Line, bool IsStart)> Endpoints { get; } = new List<(Line Line, bool IsStart)>();
+        }
 
-        private List<Point> tempConnectionPoints = new List<Point>();
+        private readonly MainWindowViewModel viewModel = new MainWindowViewModel();
         private Dictionary<Line, LineConnectionInfo> lineConnections = new Dictionary<Line, LineConnectionInfo>();
+        private Dictionary<Line, ConnectionNode> lineStartNodes = new Dictionary<Line, ConnectionNode>();
+        private Dictionary<Line, ConnectionNode> lineEndNodes = new Dictionary<Line, ConnectionNode>();
         private LineConnectionInfo wireCSplitTargets = null;
 
         private bool isDrawingOrMoving = false;
         private bool isResizing = false;
         private Point startPoint;
         private UIElement currentElement = null;
+        private Rectangle selectionBox;
+        private Line selectionLineHighlight;
         private Rectangle rectResizeHandle, lineStartHandle, lineEndHandle, activeHandle;
         private const int GridSize = 20;
 
@@ -96,9 +43,20 @@ namespace DrawingTool
             return Math.Max(1, count);
         }
 
-        private double GetSymbolFixedSize()
+        private int GetSymbolGridHeightCount()
+        {
+            if (!int.TryParse(txtSymbolGridHeightCount.Text, out int count)) return 2;
+            return Math.Max(1, count);
+        }
+
+        private double GetSymbolFixedWidth()
         {
             return GetSymbolGridWidthCount() * GridSize;
+        }
+
+        private double GetSymbolFixedHeight()
+        {
+            return GetSymbolGridHeightCount() * GridSize;
         }
 
         private bool IsAutoConnectionLine(ShapeDefinition def)
@@ -135,6 +93,10 @@ namespace DrawingTool
             {
                 Stroke = brush,
                 StrokeThickness = thickness,
+                MinWidth = 12,
+                MinHeight = 12,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
                 X1 = start.X,
                 Y1 = start.Y,
                 X2 = end.X,
@@ -146,18 +108,9 @@ namespace DrawingTool
         public MainWindow()
         {
             InitializeComponent();
+            DataContext = viewModel;
+            InitializeSelectionHighlight();
             InitializeHandles();
-            lstShapes.ItemsSource = RegisteredShapes;
-            lstRegisteredSymbols.ItemsSource = RegisteredSymbols;
-            lstPlacedSymbols.ItemsSource = PlacedSymbols;
-            
-            // 初期データ登録
-            RegisteredShapes.Add(new ShapeDefinition { Id = "LINE-NORMAL", Type = "Line", LineRole = LineRoleType.Normal });
-            RegisteredShapes.Add(new ShapeDefinition { Id = "LINE-WIRE-A", Type = "Line", LineRole = LineRoleType.WireA });
-            RegisteredShapes.Add(new ShapeDefinition { Id = "LINE-WIRE-B", Type = "Line", LineRole = LineRoleType.WireB });
-            RegisteredShapes.Add(new ShapeDefinition { Id = "LINE-WIRE-C", Type = "Line", LineRole = LineRoleType.WireC });
-            RegisteredShapes.Add(new ShapeDefinition { Id = "LINE-BUS", Type = "Line", LineRole = LineRoleType.Bus });
-            RegisteredShapes.Add(new ShapeDefinition { Id = "RECT-01", Type = "Rectangle" });
             RefreshEditor();
             RefreshPlacedSymbols();
         }
@@ -165,16 +118,17 @@ namespace DrawingTool
         private void RefreshEditor() {
             if (EditorCanvas == null) return;
             EditorCanvas.Children.Clear();
-            double size = GetSymbolFixedSize();
-            var guide = new Rectangle { Width = size, Height = size, Stroke = Brushes.LightBlue, StrokeDashArray = new DoubleCollection { 2, 2 } };
+            double width = GetSymbolFixedWidth();
+            double height = GetSymbolFixedHeight();
+            var guide = new Rectangle { Width = width, Height = height, Stroke = Brushes.LightBlue, StrokeDashArray = new DoubleCollection { 2, 2 } };
             Canvas.SetLeft(guide, 10); Canvas.SetTop(guide, 10); EditorCanvas.Children.Add(guide);
-            for (double x = 0; x <= size; x += GridSize) { for (double y = 0; y <= size; y += GridSize) { var dot = new Ellipse { Width = 4, Height = 4, Fill = Brushes.LightGray }; Canvas.SetLeft(dot, x + 10 - 2); Canvas.SetTop(dot, y + 10 - 2); EditorCanvas.Children.Add(dot); } }
-            foreach (var p in tempConnectionPoints) { var connDot = new Ellipse { Width = 8, Height = 8, Fill = Brushes.Blue, Stroke = Brushes.White, StrokeThickness = 1 }; Canvas.SetLeft(connDot, p.X + 10 - 4); Canvas.SetTop(connDot, p.Y + 10 - 4); EditorCanvas.Children.Add(connDot); }
+            for (double x = 0; x <= width; x += GridSize) { for (double y = 0; y <= height; y += GridSize) { var dot = new Ellipse { Width = 4, Height = 4, Fill = Brushes.LightGray }; Canvas.SetLeft(dot, x + 10 - 2); Canvas.SetTop(dot, y + 10 - 2); EditorCanvas.Children.Add(dot); } }
+            foreach (var p in viewModel.TempConnectionPoints) { var connDot = new Ellipse { Width = 8, Height = 8, Fill = Brushes.Blue, Stroke = Brushes.White, StrokeThickness = 1 }; Canvas.SetLeft(connDot, p.X + 10 - 4); Canvas.SetTop(connDot, p.Y + 10 - 4); EditorCanvas.Children.Add(connDot); }
         }
 
         private void RefreshPlacedSymbols()
         {
-            PlacedSymbols.Clear();
+            var placedDrawings = new List<PlacedDrawingInfo>();
 
             int no = 1;
 
@@ -184,7 +138,7 @@ namespace DrawingTool
                     symbolCanvas.Tag is ShapeDefinition def &&
                     def.Type == "Symbol")
                 {
-                    PlacedSymbols.Add(new PlacedDrawingInfo
+                    placedDrawings.Add(new PlacedDrawingInfo
                     {
                         No = no++,
                         Id = def.Id,
@@ -192,7 +146,9 @@ namespace DrawingTool
                         X = Canvas.GetLeft(symbolCanvas),
                         Y = Canvas.GetTop(symbolCanvas),
                         Size = def.FixedSize,
+                        Height = def.FixedHeight,
                         GridWidthCount = def.GridWidthCount,
+                        GridHeightCount = def.GridHeightCount,
                         ConnectionPointCount = def.ConnectionPoints.Count
                     });
                 }
@@ -200,7 +156,7 @@ namespace DrawingTool
                          line.Tag is ShapeDefinition lineDef &&
                          lineDef.Type == "Line")
                 {
-                    PlacedSymbols.Add(new PlacedDrawingInfo
+                    placedDrawings.Add(new PlacedDrawingInfo
                     {
                         No = no++,
                         Id = lineDef.Id,
@@ -215,7 +171,7 @@ namespace DrawingTool
                          rectangle.Tag is ShapeDefinition rectDef &&
                          rectDef.Type == "Rectangle")
                 {
-                    PlacedSymbols.Add(new PlacedDrawingInfo
+                    placedDrawings.Add(new PlacedDrawingInfo
                     {
                         No = no++,
                         Id = rectDef.Id,
@@ -227,15 +183,17 @@ namespace DrawingTool
                     });
                 }
             }
+
+            viewModel.RefreshPlacedDrawings(placedDrawings);
         }
 
         private void EditorCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) {
-            Point p = e.GetPosition(EditorCanvas); double size = GetSymbolFixedSize();
+            Point p = e.GetPosition(EditorCanvas); double width = GetSymbolFixedWidth(); double height = GetSymbolFixedHeight();
             double relX = Math.Round((p.X - 10) / GridSize) * GridSize; double relY = Math.Round((p.Y - 10) / GridSize) * GridSize;
-            if (relX >= 0 && relX <= size && relY >= 0 && relY <= size) { Point newPoint = new Point(relX, relY); if (tempConnectionPoints.Any(pt => pt == newPoint)) tempConnectionPoints.Remove(newPoint); else tempConnectionPoints.Add(newPoint); RefreshEditor(); }
+            if (relX >= 0 && relX <= width && relY >= 0 && relY <= height) { Point newPoint = new Point(relX, relY); if (viewModel.TempConnectionPoints.Any(pt => pt == newPoint)) viewModel.TempConnectionPoints.Remove(newPoint); else viewModel.TempConnectionPoints.Add(newPoint); RefreshEditor(); }
         }
 
-        private void TxtSymbolGridCount_TextChanged(object sender, TextChangedEventArgs e) { tempConnectionPoints.Clear(); RefreshEditor(); }
+        private void TxtSymbolGridCount_TextChanged(object sender, TextChangedEventArgs e) { viewModel.ClearTempConnectionPoints(); RefreshEditor(); }
         
         private void CmbShapeType_SelectionChanged(object sender, SelectionChangedEventArgs e) { 
             if (SymbolSettings == null || LineSettings == null) return;
@@ -251,19 +209,17 @@ namespace DrawingTool
             else if (rbLineWireC.IsChecked == true) role = LineRoleType.WireC;
             else if (rbLineBus.IsChecked == true) role = LineRoleType.Bus;
 
-            var def = new ShapeDefinition { 
-                Id = txtShapeId.Text, Type = ((ComboBoxItem)cmbShapeType.SelectedItem).Tag.ToString(),
-                FixedSize = GetSymbolFixedSize(),
-                GridWidthCount = GetSymbolGridWidthCount(),
-                ConnectionPoints = new List<Point>(tempConnectionPoints),
-                LineRole = role
-            };
-
-            RegisteredShapes.Add(def);
+            var def = viewModel.RegisterShape(
+                txtShapeId.Text,
+                ((ComboBoxItem)cmbShapeType.SelectedItem).Tag.ToString(),
+                GetSymbolFixedWidth(),
+                GetSymbolFixedHeight(),
+                GetSymbolGridWidthCount(),
+                GetSymbolGridHeightCount(),
+                role);
 
             if (def.Type == "Symbol")
             {
-                RegisteredSymbols.Add(def);
                 lstRegisteredSymbols.SelectedItem = def;
                 RightTabControl.SelectedIndex = 1; // 登録直後に「シンボル一覧」タブで確認できるようにする
             }
@@ -281,6 +237,491 @@ namespace DrawingTool
             {
                 lstShapes.SelectedItem = def;
             }
+        }
+
+        private void BtnDeleteSelected_Click(object sender, RoutedEventArgs e)
+        {
+            DeleteSelectedElement();
+        }
+
+        private void Window_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Delete || e.OriginalSource is TextBox)
+            {
+                return;
+            }
+
+            DeleteSelectedElement();
+            e.Handled = true;
+        }
+
+        private void DeleteSelectedElement()
+        {
+            if (currentElement == null || !IsSavedDrawingElement(currentElement))
+            {
+                return;
+            }
+
+            var deletedElement = currentElement;
+            RemoveConnectionsForDeletedElement(deletedElement);
+            DrawCanvas.Children.Remove(deletedElement);
+
+            currentElement = null;
+            isDrawingOrMoving = false;
+            isResizing = false;
+            activeHandle = null;
+            wireCSplitTargets = null;
+            HideAllHandles();
+            HideSelectionHighlight();
+            RefreshPlacedSymbols();
+        }
+
+        private void RemoveConnectionsForDeletedElement(UIElement deletedElement)
+        {
+            if (deletedElement is Line deletedLine)
+            {
+                RemoveEndpointFromNode(deletedLine, true);
+                RemoveEndpointFromNode(deletedLine, false);
+                lineConnections.Remove(deletedLine);
+            }
+
+            foreach (var connection in lineConnections.Values)
+            {
+                if (connection.StartElement == deletedElement)
+                {
+                    connection.StartElement = null;
+                    connection.StartRelPoint = new Point();
+                    connection.StartLineRatio = 0;
+                }
+
+                if (connection.EndElement == deletedElement)
+                {
+                    connection.EndElement = null;
+                    connection.EndRelPoint = new Point();
+                    connection.EndLineRatio = 0;
+                }
+            }
+        }
+
+        private void BtnSave_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new SaveFileDialog
+            {
+                Title = "図面データを保存",
+                Filter = "Drawing Tool JSON (*.json)|*.json|All files (*.*)|*.*",
+                DefaultExt = ".json",
+                FileName = $"drawing-{DateTime.Now:yyyyMMdd-HHmmss}.json"
+            };
+
+            if (dialog.ShowDialog(this) != true)
+            {
+                return;
+            }
+
+            var saveData = CreateSaveData();
+            var options = new JsonSerializerOptions { WriteIndented = true };
+            File.WriteAllText(dialog.FileName, JsonSerializer.Serialize(saveData, options));
+            MessageBox.Show(this, "保存しました。", "保存", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void BtnOpen_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new OpenFileDialog
+            {
+                Title = "図面データを開く",
+                Filter = "Drawing Tool JSON (*.json)|*.json|All files (*.*)|*.*",
+                DefaultExt = ".json"
+            };
+
+            if (dialog.ShowDialog(this) != true)
+            {
+                return;
+            }
+
+            try
+            {
+                var json = File.ReadAllText(dialog.FileName);
+                var saveData = JsonSerializer.Deserialize<DrawingSaveData>(json);
+                if (saveData == null)
+                {
+                    MessageBox.Show(this, "ファイルを読み込めませんでした。", "開く", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                LoadSaveData(saveData);
+                MessageBox.Show(this, "読み込みました。", "開く", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"ファイルを開けませんでした。\n{ex.Message}", "開く", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void LoadSaveData(DrawingSaveData saveData)
+        {
+            HideAllHandles();
+            currentElement = null;
+            isDrawingOrMoving = false;
+            isResizing = false;
+            activeHandle = null;
+            wireCSplitTargets = null;
+            HideSelectionHighlight();
+            lineConnections.Clear();
+            lineStartNodes.Clear();
+            lineEndNodes.Clear();
+
+            foreach (var element in DrawCanvas.Children.OfType<UIElement>().Where(IsSavedDrawingElement).ToList())
+            {
+                DrawCanvas.Children.Remove(element);
+            }
+
+            var definitions = saveData.ShapeDefinitions
+                .Select(CreateShapeDefinition)
+                .ToList();
+            viewModel.ReplaceShapeDefinitions(definitions);
+
+            var definitionById = definitions
+                .Where(definition => !string.IsNullOrWhiteSpace(definition.Id))
+                .GroupBy(definition => definition.Id)
+                .ToDictionary(group => group.Key, group => group.First());
+            var elementsByItemNo = new Dictionary<int, UIElement>();
+
+            foreach (var item in saveData.Items.OrderBy(item => item.ItemNo))
+            {
+                var definition = GetDefinitionForLoadedItem(item, definitionById);
+                var element = CreateElementFromSavedItem(item, definition);
+                DrawCanvas.Children.Add(element);
+                elementsByItemNo[item.ItemNo] = element;
+            }
+
+            RestoreLineConnections(saveData, elementsByItemNo);
+            RestoreConnectionNodes(saveData, elementsByItemNo);
+
+            foreach (var line in elementsByItemNo.Values.OfType<Line>())
+            {
+                ApplyOwnLineConnections(line);
+                UpdateConnectedLines(line);
+            }
+
+            rbSelect.IsChecked = true;
+            RefreshPlacedSymbols();
+        }
+
+        private ShapeDefinition CreateShapeDefinition(SavedShapeDefinition savedDefinition)
+        {
+            Enum.TryParse(savedDefinition.LineRole, out LineRoleType lineRole);
+            int gridWidthCount = savedDefinition.GridWidthCount > 0 ? savedDefinition.GridWidthCount : 3;
+            int gridHeightCount = savedDefinition.GridHeightCount > 0 ? savedDefinition.GridHeightCount : gridWidthCount;
+            double fixedSize = savedDefinition.FixedSize > 0 ? savedDefinition.FixedSize : gridWidthCount * GridSize;
+            double fixedHeight = savedDefinition.FixedHeight > 0 ? savedDefinition.FixedHeight : gridHeightCount * GridSize;
+
+            return new ShapeDefinition
+            {
+                Id = savedDefinition.Id,
+                Type = savedDefinition.Type,
+                FixedSize = fixedSize,
+                FixedHeight = fixedHeight,
+                GridWidthCount = gridWidthCount,
+                GridHeightCount = gridHeightCount,
+                LineRole = lineRole,
+                ConnectionPoints = savedDefinition.ConnectionPoints
+                    .Select(point => new Point(point.X, point.Y))
+                    .ToList()
+            };
+        }
+
+        private ShapeDefinition GetDefinitionForLoadedItem(SavedDrawingItem item, Dictionary<string, ShapeDefinition> definitionById)
+        {
+            if (definitionById.TryGetValue(item.DefinitionId, out var definition))
+            {
+                return definition;
+            }
+
+            return new ShapeDefinition
+            {
+                Id = item.DefinitionId,
+                Type = item.Type,
+                FixedSize = item.Width,
+                FixedHeight = item.Height
+            };
+        }
+
+        private UIElement CreateElementFromSavedItem(SavedDrawingItem item, ShapeDefinition definition)
+        {
+            if (item.Type == "Line")
+            {
+                return CreateLineElement(definition, new Point(item.X, item.Y), new Point(item.X2, item.Y2));
+            }
+
+            if (item.Type == "Symbol")
+            {
+                return CreateSymbolElement(definition, item.X, item.Y, item.Width, item.Height);
+            }
+
+            return CreateRectangleElement(definition, item.X, item.Y, item.Width, item.Height);
+        }
+
+        private Rectangle CreateRectangleElement(ShapeDefinition definition, double x, double y, double width, double height)
+        {
+            var rectangle = new Rectangle
+            {
+                Width = Math.Max(GridSize, width),
+                Height = Math.Max(GridSize, height),
+                Stroke = Brushes.Blue,
+                StrokeThickness = 2,
+                Fill = new SolidColorBrush(Color.FromArgb(100, 173, 216, 230)),
+                Tag = definition
+            };
+            Canvas.SetLeft(rectangle, x);
+            Canvas.SetTop(rectangle, y);
+            return rectangle;
+        }
+
+        private Canvas CreateSymbolElement(ShapeDefinition definition, double x, double y, double width, double height)
+        {
+            double symbolWidth = width > 0 ? width : definition.FixedSize;
+            double symbolHeight = height > 0 ? height : (definition.FixedHeight > 0 ? definition.FixedHeight : definition.FixedSize);
+            var symbol = new Canvas { Width = symbolWidth, Height = symbolHeight, Tag = definition };
+            symbol.Children.Add(new Rectangle
+            {
+                Width = symbolWidth,
+                Height = symbolHeight,
+                Stroke = Brushes.DarkOrange,
+                StrokeThickness = 2,
+                Fill = Brushes.Orange
+            });
+
+            foreach (var connectionPoint in definition.ConnectionPoints)
+            {
+                var dot = new Ellipse
+                {
+                    Width = 6,
+                    Height = 6,
+                    Fill = Brushes.Blue,
+                    Stroke = Brushes.White,
+                    StrokeThickness = 1
+                };
+                Canvas.SetLeft(dot, connectionPoint.X - 3);
+                Canvas.SetTop(dot, connectionPoint.Y - 3);
+                symbol.Children.Add(dot);
+            }
+
+            Canvas.SetLeft(symbol, x);
+            Canvas.SetTop(symbol, y);
+            return symbol;
+        }
+
+        private void RestoreLineConnections(DrawingSaveData saveData, Dictionary<int, UIElement> elementsByItemNo)
+        {
+            foreach (var item in saveData.Items)
+            {
+                if (!elementsByItemNo.TryGetValue(item.ItemNo, out var element) || element is not Line line)
+                {
+                    continue;
+                }
+
+                var connection = new LineConnectionInfo();
+                RestoreEndpointConnection(item.StartConnection, connection, true, elementsByItemNo);
+                RestoreEndpointConnection(item.EndConnection, connection, false, elementsByItemNo);
+
+                if (connection.StartElement != null || connection.EndElement != null)
+                {
+                    lineConnections[line] = connection;
+                }
+            }
+        }
+
+        private void RestoreEndpointConnection(
+            SavedLineEndpointConnection? savedConnection,
+            LineConnectionInfo connection,
+            bool isStart,
+            Dictionary<int, UIElement> elementsByItemNo)
+        {
+            if (savedConnection == null ||
+                !elementsByItemNo.TryGetValue(savedConnection.TargetItemNo, out var targetElement))
+            {
+                return;
+            }
+
+            if (isStart)
+            {
+                connection.StartElement = targetElement;
+                connection.StartRelPoint = new Point(savedConnection.RelativeX, savedConnection.RelativeY);
+                connection.StartLineRatio = savedConnection.LineRatio;
+            }
+            else
+            {
+                connection.EndElement = targetElement;
+                connection.EndRelPoint = new Point(savedConnection.RelativeX, savedConnection.RelativeY);
+                connection.EndLineRatio = savedConnection.LineRatio;
+            }
+        }
+
+        private void RestoreConnectionNodes(DrawingSaveData saveData, Dictionary<int, UIElement> elementsByItemNo)
+        {
+            foreach (var savedNode in saveData.ConnectionNodes.OrderBy(node => node.NodeId))
+            {
+                var node = new ConnectionNode { Position = new Point(savedNode.X, savedNode.Y) };
+                foreach (var endpoint in savedNode.Endpoints)
+                {
+                    if (elementsByItemNo.TryGetValue(endpoint.ItemNo, out var element) && element is Line line)
+                    {
+                        AttachEndpointToNode(line, endpoint.IsStart, node);
+                    }
+                }
+            }
+        }
+
+        private DrawingSaveData CreateSaveData()
+        {
+            var saveData = new DrawingSaveData();
+            var itemNumbers = new Dictionary<UIElement, int>();
+            var nodeNumbers = new Dictionary<ConnectionNode, int>();
+
+            int itemNo = 1;
+            foreach (UIElement element in DrawCanvas.Children)
+            {
+                if (IsSavedDrawingElement(element))
+                {
+                    itemNumbers[element] = itemNo++;
+                }
+            }
+
+            int nodeNo = 1;
+            foreach (var node in lineStartNodes.Values.Concat(lineEndNodes.Values).Distinct())
+            {
+                nodeNumbers[node] = nodeNo++;
+            }
+
+            foreach (var definition in viewModel.RegisteredShapes)
+            {
+                saveData.ShapeDefinitions.Add(new SavedShapeDefinition
+                {
+                    Id = definition.Id,
+                    Type = definition.Type,
+                    FixedSize = definition.FixedSize,
+                    FixedHeight = definition.FixedHeight,
+                    GridWidthCount = definition.GridWidthCount,
+                    GridHeightCount = definition.GridHeightCount,
+                    LineRole = definition.LineRole.ToString(),
+                    ConnectionPoints = definition.ConnectionPoints
+                        .Select(point => new SavedPoint { X = point.X, Y = point.Y })
+                        .ToList()
+                });
+            }
+
+            foreach (var nodePair in nodeNumbers.OrderBy(pair => pair.Value))
+            {
+                var node = nodePair.Key;
+                saveData.ConnectionNodes.Add(new SavedConnectionNode
+                {
+                    NodeId = nodePair.Value,
+                    X = node.Position.X,
+                    Y = node.Position.Y,
+                    Endpoints = node.Endpoints
+                        .Where(endpoint => itemNumbers.ContainsKey(endpoint.Line))
+                        .Select(endpoint => new SavedNodeEndpoint
+                        {
+                            ItemNo = itemNumbers[endpoint.Line],
+                            IsStart = endpoint.IsStart
+                        })
+                        .ToList()
+                });
+            }
+
+            foreach (var itemPair in itemNumbers.OrderBy(pair => pair.Value))
+            {
+                saveData.Items.Add(CreateSavedDrawingItem(itemPair.Key, itemPair.Value, itemNumbers, nodeNumbers));
+            }
+
+            return saveData;
+        }
+
+        private bool IsSavedDrawingElement(UIElement element)
+        {
+            return element switch
+            {
+                Canvas canvas => canvas.Tag is ShapeDefinition,
+                Line line => line.Tag is ShapeDefinition,
+                Rectangle rectangle => rectangle.Tag is ShapeDefinition,
+                _ => false
+            };
+        }
+
+        private SavedDrawingItem CreateSavedDrawingItem(
+            UIElement element,
+            int itemNo,
+            Dictionary<UIElement, int> itemNumbers,
+            Dictionary<ConnectionNode, int> nodeNumbers)
+        {
+            var definition = (ShapeDefinition)((FrameworkElement)element).Tag;
+            var item = new SavedDrawingItem
+            {
+                ItemNo = itemNo,
+                DefinitionId = definition.Id,
+                Type = definition.Type
+            };
+
+            if (element is Canvas canvas)
+            {
+                item.X = Canvas.GetLeft(canvas);
+                item.Y = Canvas.GetTop(canvas);
+                item.Width = canvas.Width;
+                item.Height = canvas.Height;
+            }
+            else if (element is Rectangle rectangle)
+            {
+                item.X = Canvas.GetLeft(rectangle);
+                item.Y = Canvas.GetTop(rectangle);
+                item.Width = rectangle.Width;
+                item.Height = rectangle.Height;
+            }
+            else if (element is Line line)
+            {
+                item.X = line.X1;
+                item.Y = line.Y1;
+                item.X2 = line.X2;
+                item.Y2 = line.Y2;
+
+                if (GetEndpointNode(line, true) is ConnectionNode startNode && nodeNumbers.TryGetValue(startNode, out int startNodeId))
+                {
+                    item.StartNodeId = startNodeId;
+                }
+
+                if (GetEndpointNode(line, false) is ConnectionNode endNode && nodeNumbers.TryGetValue(endNode, out int endNodeId))
+                {
+                    item.EndNodeId = endNodeId;
+                }
+
+                if (lineConnections.TryGetValue(line, out var connection))
+                {
+                    item.StartConnection = CreateSavedEndpointConnection(connection.StartElement, connection.StartRelPoint, connection.StartLineRatio, itemNumbers);
+                    item.EndConnection = CreateSavedEndpointConnection(connection.EndElement, connection.EndRelPoint, connection.EndLineRatio, itemNumbers);
+                }
+            }
+
+            return item;
+        }
+
+        private SavedLineEndpointConnection? CreateSavedEndpointConnection(
+            UIElement? targetElement,
+            Point relativePoint,
+            double lineRatio,
+            Dictionary<UIElement, int> itemNumbers)
+        {
+            if (targetElement == null || !itemNumbers.TryGetValue(targetElement, out int targetItemNo))
+            {
+                return null;
+            }
+
+            return new SavedLineEndpointConnection
+            {
+                TargetItemNo = targetItemNo,
+                TargetKind = targetElement is Line ? "Line" : "Symbol",
+                RelativeX = relativePoint.X,
+                RelativeY = relativePoint.Y,
+                LineRatio = lineRatio
+            };
         }
 
         // ★スナップ判定：WireA / WireB / WireC でターゲットの許可条件を変える
@@ -367,6 +808,10 @@ namespace DrawingTool
             {
                 Stroke = source.Stroke,
                 StrokeThickness = source.StrokeThickness,
+                MinWidth = source.MinWidth,
+                MinHeight = source.MinHeight,
+                StrokeStartLineCap = source.StrokeStartLineCap,
+                StrokeEndLineCap = source.StrokeEndLineCap,
                 X1 = start.X,
                 Y1 = start.Y,
                 X2 = end.X,
@@ -447,6 +892,104 @@ namespace DrawingTool
             }
         }
 
+        private void ClearLineConnectionEndpoint(Line line, bool isStart)
+        {
+            if (!lineConnections.TryGetValue(line, out var info))
+            {
+                return;
+            }
+
+            if (isStart)
+            {
+                info.StartElement = null;
+                info.StartRelPoint = new Point();
+                info.StartLineRatio = 0;
+            }
+            else
+            {
+                info.EndElement = null;
+                info.EndRelPoint = new Point();
+                info.EndLineRatio = 0;
+            }
+        }
+
+        private ConnectionNode GetEndpointNode(Line line, bool isStart)
+        {
+            if (isStart)
+            {
+                return lineStartNodes.TryGetValue(line, out var startNode) ? startNode : null;
+            }
+
+            return lineEndNodes.TryGetValue(line, out var endNode) ? endNode : null;
+        }
+
+        private void RemoveEndpointFromNode(Line line, bool isStart)
+        {
+            var node = GetEndpointNode(line, isStart);
+            if (node == null)
+            {
+                return;
+            }
+
+            node.Endpoints.RemoveAll(endpoint => endpoint.Line == line && endpoint.IsStart == isStart);
+            if (isStart)
+            {
+                lineStartNodes.Remove(line);
+            }
+            else
+            {
+                lineEndNodes.Remove(line);
+            }
+        }
+
+        private void AttachEndpointToNode(Line line, bool isStart, ConnectionNode node)
+        {
+            RemoveEndpointFromNode(line, isStart);
+            ClearLineConnectionEndpoint(line, isStart);
+
+            if (!node.Endpoints.Any(endpoint => endpoint.Line == line && endpoint.IsStart == isStart))
+            {
+                node.Endpoints.Add((line, isStart));
+            }
+
+            if (isStart)
+            {
+                lineStartNodes[line] = node;
+                line.X1 = node.Position.X;
+                line.Y1 = node.Position.Y;
+            }
+            else
+            {
+                lineEndNodes[line] = node;
+                line.X2 = node.Position.X;
+                line.Y2 = node.Position.Y;
+            }
+        }
+
+        private void MoveConnectionNode(ConnectionNode node, Point newPosition)
+        {
+            node.Position = newPosition;
+
+            foreach (var endpoint in node.Endpoints.ToList())
+            {
+                if (endpoint.IsStart)
+                {
+                    endpoint.Line.X1 = newPosition.X;
+                    endpoint.Line.Y1 = newPosition.Y;
+                }
+                else
+                {
+                    endpoint.Line.X2 = newPosition.X;
+                    endpoint.Line.Y2 = newPosition.Y;
+                }
+            }
+
+            foreach (var endpoint in node.Endpoints.ToList())
+            {
+                UpdateConnectedLines(endpoint.Line);
+            }
+        }
+
         private Point GetConnectedPoint(UIElement targetElement, Point relPoint, double lineRatio)
         {
             if (targetElement is Canvas symbol)
@@ -468,17 +1011,43 @@ namespace DrawingTool
         {
             if (!lineConnections.TryGetValue(line, out var info))
             {
+                var startNodeOnly = GetEndpointNode(line, true);
+                if (startNodeOnly != null)
+                {
+                    line.X1 = startNodeOnly.Position.X;
+                    line.Y1 = startNodeOnly.Position.Y;
+                }
+
+                var endNodeOnly = GetEndpointNode(line, false);
+                if (endNodeOnly != null)
+                {
+                    line.X2 = endNodeOnly.Position.X;
+                    line.Y2 = endNodeOnly.Position.Y;
+                }
+
                 return;
             }
 
-            if (info.StartElement != null)
+            var startNode = GetEndpointNode(line, true);
+            if (startNode != null)
+            {
+                line.X1 = startNode.Position.X;
+                line.Y1 = startNode.Position.Y;
+            }
+            else if (info.StartElement != null)
             {
                 Point p = GetConnectedPoint(info.StartElement, info.StartRelPoint, info.StartLineRatio);
                 line.X1 = p.X;
                 line.Y1 = p.Y;
             }
 
-            if (info.EndElement != null)
+            var endNode = GetEndpointNode(line, false);
+            if (endNode != null)
+            {
+                line.X2 = endNode.Position.X;
+                line.Y2 = endNode.Position.Y;
+            }
+            else if (info.EndElement != null)
             {
                 Point p = GetConnectedPoint(info.EndElement, info.EndRelPoint, info.EndLineRatio);
                 line.X2 = p.X;
@@ -488,6 +1057,13 @@ namespace DrawingTool
 
         private bool TryMoveConnectedLineEndpoint(Line line, bool isStartHandle, Point newPoint)
         {
+            var node = GetEndpointNode(line, isStartHandle);
+            if (node != null)
+            {
+                MoveConnectionNode(node, newPoint);
+                return true;
+            }
+
             if (!lineConnections.TryGetValue(line, out var info))
             {
                 return false;
@@ -532,11 +1108,15 @@ namespace DrawingTool
                 targetLine.X1 + ratio * (targetLine.X2 - targetLine.X1),
                 targetLine.Y1 + ratio * (targetLine.Y2 - targetLine.Y1));
             splitPoint = RoundPointToGrid(splitPoint);
+            var originalStartNode = GetEndpointNode(targetLine, true);
+            var originalEndNode = GetEndpointNode(targetLine, false);
 
             var firstSegment = CloneLineSegment(targetLine, start, splitPoint);
             var secondSegment = CloneLineSegment(targetLine, splitPoint, end);
             int index = DrawCanvas.Children.IndexOf(targetLine);
 
+            RemoveEndpointFromNode(targetLine, true);
+            RemoveEndpointFromNode(targetLine, false);
             DrawCanvas.Children.Remove(targetLine);
             if (index < 0 || index > DrawCanvas.Children.Count)
             {
@@ -550,7 +1130,57 @@ namespace DrawingTool
             }
 
             MoveConnectionsFromSplitLine(targetLine, firstSegment, secondSegment, ratio);
+            if (originalStartNode != null)
+            {
+                AttachEndpointToNode(firstSegment, true, originalStartNode);
+            }
+
+            if (originalEndNode != null)
+            {
+                AttachEndpointToNode(secondSegment, false, originalEndNode);
+            }
+
             return (firstSegment, secondSegment);
+        }
+
+        private bool CanSplitLineByWireC(Line targetLine)
+        {
+            return targetLine.Tag is ShapeDefinition definition &&
+                   definition.LineRole != LineRoleType.Bus;
+        }
+
+        private Line FindLineNearPoint(Point point, double maxDistance)
+        {
+            Line bestLine = null;
+            double bestDistance = maxDistance;
+
+            foreach (UIElement element in DrawCanvas.Children)
+            {
+                if (element is not Line line || line.Tag is not ShapeDefinition)
+                {
+                    continue;
+                }
+
+                Point a = new Point(line.X1, line.Y1);
+                Point b = new Point(line.X2, line.Y2);
+                double lengthSquared = Math.Pow(a.X - b.X, 2) + Math.Pow(a.Y - b.Y, 2);
+                if (lengthSquared == 0)
+                {
+                    continue;
+                }
+
+                double t = Math.Max(0, Math.Min(1, ((point.X - a.X) * (b.X - a.X) + (point.Y - a.Y) * (b.Y - a.Y)) / lengthSquared));
+                Point projection = new Point(a.X + t * (b.X - a.X), a.Y + t * (b.Y - a.Y));
+                double distance = Math.Sqrt(Math.Pow(point.X - projection.X, 2) + Math.Pow(point.Y - projection.Y, 2));
+
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    bestLine = line;
+                }
+            }
+
+            return bestLine;
         }
 
         private void SplitWireCTargetLines(Line wireCLine)
@@ -569,32 +1199,30 @@ namespace DrawingTool
 
             // WireC はT字接続の交点を1か所だけ分割する。
             // 両端が線に吸着した場合は、描画終了点側を優先して余分な4本化を防ぐ。
-            if (wireCSplitTargets.EndElement is Line endTarget && IsInteriorLinePoint(wireCSplitTargets.EndLineRatio))
+            if (wireCSplitTargets.EndElement is Line endTarget &&
+                CanSplitLineByWireC(endTarget) &&
+                IsInteriorLinePoint(wireCSplitTargets.EndLineRatio))
             {
                 var split = SplitLineAtRatio(endTarget, wireCSplitTargets.EndLineRatio);
                 if (split.SecondSegment != null)
                 {
-                    EnsureLineConnection(wireCLine);
-                    lineConnections[wireCLine].EndElement = split.FirstSegment;
-                    lineConnections[wireCLine].EndLineRatio = 1;
-
-                    EnsureLineConnection(split.SecondSegment);
-                    lineConnections[split.SecondSegment].StartElement = split.FirstSegment;
-                    lineConnections[split.SecondSegment].StartLineRatio = 1;
+                    var node = new ConnectionNode { Position = new Point(split.FirstSegment.X2, split.FirstSegment.Y2) };
+                    AttachEndpointToNode(split.FirstSegment, false, node);
+                    AttachEndpointToNode(split.SecondSegment, true, node);
+                    AttachEndpointToNode(wireCLine, false, node);
                 }
             }
-            else if (wireCSplitTargets.StartElement is Line startTarget && IsInteriorLinePoint(wireCSplitTargets.StartLineRatio))
+            else if (wireCSplitTargets.StartElement is Line startTarget &&
+                     CanSplitLineByWireC(startTarget) &&
+                     IsInteriorLinePoint(wireCSplitTargets.StartLineRatio))
             {
                 var split = SplitLineAtRatio(startTarget, wireCSplitTargets.StartLineRatio);
                 if (split.SecondSegment != null)
                 {
-                    EnsureLineConnection(wireCLine);
-                    lineConnections[wireCLine].StartElement = split.FirstSegment;
-                    lineConnections[wireCLine].StartLineRatio = 1;
-
-                    EnsureLineConnection(split.SecondSegment);
-                    lineConnections[split.SecondSegment].StartElement = split.FirstSegment;
-                    lineConnections[split.SecondSegment].StartLineRatio = 1;
+                    var node = new ConnectionNode { Position = new Point(split.FirstSegment.X2, split.FirstSegment.Y2) };
+                    AttachEndpointToNode(split.FirstSegment, false, node);
+                    AttachEndpointToNode(split.SecondSegment, true, node);
+                    AttachEndpointToNode(wireCLine, true, node);
                 }
             }
 
@@ -610,11 +1238,29 @@ namespace DrawingTool
                     var parent = VisualTreeHelper.GetParent(shape) as Canvas;
                     currentElement = (parent != null && parent.Tag is ShapeDefinition) ? (UIElement)parent : (UIElement)shape;
                     isDrawingOrMoving = true;
+                    ShowSelectionHighlight(currentElement);
                     if (currentElement is Shape s && s.Tag is ShapeDefinition d) ShowResizeHandles(s, d);
                     else if (currentElement is Canvas c && c.Tag is ShapeDefinition cd) ShowResizeHandles(c, cd);
-                } else if (e.OriginalSource == DrawCanvas) { currentElement = null; HideAllHandles(); }
+                } else if (e.OriginalSource == DrawCanvas) {
+                    var nearbyLine = FindLineNearPoint(rawPoint, 12);
+                    if (nearbyLine != null && nearbyLine.Tag is ShapeDefinition nearbyDef)
+                    {
+                        currentElement = nearbyLine;
+                        isDrawingOrMoving = true;
+                        ShowSelectionHighlight(currentElement);
+                        ShowResizeHandles(nearbyLine, nearbyDef);
+                    }
+                    else
+                    {
+                        currentElement = null;
+                        HideAllHandles();
+                        HideSelectionHighlight();
+                    }
+                }
             }
             else if (rbDraw.IsChecked == true) {
+                HideSelectionHighlight();
+                HideAllHandles();
                 var def = lstShapes.SelectedItem as ShapeDefinition;
                 if (def == null) return;
                 
@@ -638,13 +1284,15 @@ namespace DrawingTool
                     Canvas.SetLeft(r, startPoint.X); Canvas.SetTop(r, startPoint.Y); currentElement = r; DrawCanvas.Children.Add(r); isDrawingOrMoving = true;
                 }
                 else if (def.Type == "Symbol") {
-                    var sym = new Canvas { Width = def.FixedSize, Height = def.FixedSize, Tag = def };
-                    sym.Children.Add(new Rectangle { Width = def.FixedSize, Height = def.FixedSize, Stroke = Brushes.DarkOrange, StrokeThickness = 2, Fill = Brushes.Orange });
+                    double symbolWidth = def.FixedSize;
+                    double symbolHeight = def.FixedHeight > 0 ? def.FixedHeight : def.FixedSize;
+                    var sym = new Canvas { Width = symbolWidth, Height = symbolHeight, Tag = def };
+                    sym.Children.Add(new Rectangle { Width = symbolWidth, Height = symbolHeight, Stroke = Brushes.DarkOrange, StrokeThickness = 2, Fill = Brushes.Orange });
                     foreach (var cp in def.ConnectionPoints) {
                         var dot = new Ellipse { Width = 6, Height = 6, Fill = Brushes.Blue, Stroke = Brushes.White, StrokeThickness = 1 };
                         Canvas.SetLeft(dot, cp.X - 3); Canvas.SetTop(dot, cp.Y - 3); sym.Children.Add(dot);
                     }
-                    Canvas.SetLeft(sym, startPoint.X - def.FixedSize / 2); Canvas.SetTop(sym, startPoint.Y - def.FixedSize / 2);
+                    Canvas.SetLeft(sym, startPoint.X); Canvas.SetTop(sym, startPoint.Y);
                     DrawCanvas.Children.Add(sym);
                     RefreshPlacedSymbols();
                 }
@@ -702,6 +1350,7 @@ namespace DrawingTool
                     bool isStartHandle = activeHandle == lineStartHandle;
                     if (TryMoveConnectedLineEndpoint(l, isStartHandle, gridP))
                     {
+                        UpdateSelectionHighlight(currentElement);
                         UpdateHandlePositions(currentElement);
                         return;
                     }
@@ -728,6 +1377,7 @@ namespace DrawingTool
                     } 
                     UpdateConnectedLines(l); 
                 }
+                UpdateSelectionHighlight(currentElement);
                 UpdateHandlePositions(currentElement);
             } else if (isDrawingOrMoving && currentElement != null) {
                 if (rbSelect.IsChecked == true) {
@@ -742,6 +1392,7 @@ namespace DrawingTool
                             Canvas.SetLeft(currentElement, Canvas.GetLeft(currentElement) + dx); Canvas.SetTop(currentElement, Canvas.GetTop(currentElement) + dy); 
                             UpdateConnectedLines(currentElement); 
                         }
+                        UpdateSelectionHighlight(currentElement);
                         UpdateHandlePositions(currentElement); startPoint = gridP;
                     }
                 } else {
@@ -778,12 +1429,105 @@ namespace DrawingTool
             RefreshPlacedSymbols();
         }
 
+        private void InitializeSelectionHighlight()
+        {
+            selectionBox = new Rectangle
+            {
+                Stroke = Brushes.Gold,
+                StrokeThickness = 3,
+                StrokeDashArray = new DoubleCollection { 4, 2 },
+                Fill = Brushes.Transparent,
+                Visibility = Visibility.Collapsed,
+                IsHitTestVisible = false
+            };
+
+            selectionLineHighlight = new Line
+            {
+                Stroke = Brushes.Gold,
+                StrokeThickness = 8,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                Opacity = 0.45,
+                Visibility = Visibility.Collapsed,
+                IsHitTestVisible = false
+            };
+
+            DrawCanvas.Children.Add(selectionBox);
+            DrawCanvas.Children.Add(selectionLineHighlight);
+        }
+
+        private void ShowSelectionHighlight(UIElement element)
+        {
+            UpdateSelectionHighlight(element);
+        }
+
+        private void HideSelectionHighlight()
+        {
+            selectionBox.Visibility = Visibility.Collapsed;
+            selectionLineHighlight.Visibility = Visibility.Collapsed;
+        }
+
+        private void UpdateSelectionHighlight(UIElement element)
+        {
+            if (element is Line line)
+            {
+                selectionBox.Visibility = Visibility.Collapsed;
+                selectionLineHighlight.X1 = line.X1;
+                selectionLineHighlight.Y1 = line.Y1;
+                selectionLineHighlight.X2 = line.X2;
+                selectionLineHighlight.Y2 = line.Y2;
+                selectionLineHighlight.Visibility = Visibility.Visible;
+                return;
+            }
+
+            selectionLineHighlight.Visibility = Visibility.Collapsed;
+
+            if (element is Rectangle rectangle)
+            {
+                Canvas.SetLeft(selectionBox, Canvas.GetLeft(rectangle) - 4);
+                Canvas.SetTop(selectionBox, Canvas.GetTop(rectangle) - 4);
+                selectionBox.Width = rectangle.Width + 8;
+                selectionBox.Height = rectangle.Height + 8;
+                selectionBox.Visibility = Visibility.Visible;
+                return;
+            }
+
+            if (element is Canvas canvas)
+            {
+                Canvas.SetLeft(selectionBox, Canvas.GetLeft(canvas) - 4);
+                Canvas.SetTop(selectionBox, Canvas.GetTop(canvas) - 4);
+                selectionBox.Width = canvas.Width + 8;
+                selectionBox.Height = canvas.Height + 8;
+                selectionBox.Visibility = Visibility.Visible;
+                return;
+            }
+
+            HideSelectionHighlight();
+        }
+
         private void InitializeHandles() { rectResizeHandle = CreateHandle(Brushes.Red, Cursors.SizeNWSE); lineStartHandle = CreateHandle(Brushes.Green, Cursors.Cross); lineEndHandle = CreateHandle(Brushes.Green, Cursors.Cross); }
-        private Rectangle CreateHandle(Brush c, Cursor cur) { var h = new Rectangle { Width = 10, Height = 10, Fill = c, Visibility = Visibility.Collapsed, Cursor = cur }; h.MouseLeftButtonDown += (s, e) => { isResizing = true; activeHandle = h; startPoint = SnapToGrid(e.GetPosition(DrawCanvas)); DrawCanvas.CaptureMouse(); e.Handled = true; }; DrawCanvas.Children.Add(h); return h; }
+        private Rectangle CreateHandle(Brush c, Cursor cur) { var h = new Rectangle { Width = 16, Height = 16, Fill = c, Stroke = Brushes.White, StrokeThickness = 2, Visibility = Visibility.Collapsed, Cursor = cur }; h.MouseLeftButtonDown += (s, e) => { isResizing = true; activeHandle = h; startPoint = SnapToGrid(e.GetPosition(DrawCanvas)); DrawCanvas.CaptureMouse(); e.Handled = true; }; DrawCanvas.Children.Add(h); return h; }
         private Point SnapToGrid(Point p) => new Point(Math.Round(p.X / GridSize) * GridSize, Math.Round(p.Y / GridSize) * GridSize);
         private bool IsHandle(Shape s) => s == rectResizeHandle || s == lineStartHandle || s == lineEndHandle;
         private void HideAllHandles() { rectResizeHandle.Visibility = lineStartHandle.Visibility = lineEndHandle.Visibility = Visibility.Collapsed; }
         private void ShowResizeHandles(UIElement e, ShapeDefinition d) { HideAllHandles(); if (!d.IsResizable) return; if (e is Rectangle r) { rectResizeHandle.Visibility = Visibility.Visible; UpdateHandlePositions(r); } else if (e is Line l) { lineStartHandle.Visibility = lineEndHandle.Visibility = Visibility.Visible; UpdateHandlePositions(l); } }
-        private void UpdateHandlePositions(UIElement e) { if (e is Rectangle r) { Canvas.SetLeft(rectResizeHandle, Canvas.GetLeft(r) + r.Width - 5); Canvas.SetTop(rectResizeHandle, Canvas.GetTop(r) + r.Height - 5); } else if (e is Line l) { Canvas.SetLeft(lineStartHandle, l.X1 - 5); Canvas.SetTop(lineStartHandle, l.Y1 - 5); Canvas.SetLeft(lineEndHandle, l.X2 - 5); Canvas.SetTop(lineEndHandle, l.Y2 - 5); } }
+        private bool IsConnectedLineEndpoint(Line line, bool isStartHandle)
+        {
+            if (GetEndpointNode(line, isStartHandle) != null)
+            {
+                return true;
+            }
+
+            if (!lineConnections.TryGetValue(line, out var info))
+            {
+                return false;
+            }
+
+            UIElement connectedElement = isStartHandle ? info.StartElement : info.EndElement;
+            double ratio = isStartHandle ? info.StartLineRatio : info.EndLineRatio;
+            return connectedElement is Line && IsLineEndpointRatio(ratio);
+        }
+
+        private void UpdateHandlePositions(UIElement e) { if (e is Rectangle r) { Canvas.SetLeft(rectResizeHandle, Canvas.GetLeft(r) + r.Width - 8); Canvas.SetTop(rectResizeHandle, Canvas.GetTop(r) + r.Height - 8); } else if (e is Line l) { lineStartHandle.Fill = IsConnectedLineEndpoint(l, true) ? Brushes.Gold : Brushes.Green; lineEndHandle.Fill = IsConnectedLineEndpoint(l, false) ? Brushes.Gold : Brushes.Green; Canvas.SetLeft(lineStartHandle, l.X1 - 8); Canvas.SetTop(lineStartHandle, l.Y1 - 8); Canvas.SetLeft(lineEndHandle, l.X2 - 8); Canvas.SetTop(lineEndHandle, l.Y2 - 8); } }
     }
 }
