@@ -146,6 +146,44 @@
                     </StackPanel>
                 </Grid>
             </TabItem>
+
+            <TabItem Header="CSV一覧">
+                <Grid Margin="5">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="2*"/>
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,5">
+                        <TextBlock Text="CSVテーブル一覧:" FontWeight="Bold" VerticalAlignment="Center"/>
+                        <Button Content="更新" Click="BtnRefreshCsvTables_Click" Padding="6,2" Margin="8,0,0,0"/>
+                    </StackPanel>
+                    <ListBox Grid.Row="1"
+                             Name="lstCsvTables"
+                             SelectionChanged="LstCsvTables_SelectionChanged"/>
+
+                    <TextBlock Grid.Row="2"
+                               Text="選択テーブルの列一覧:"
+                               FontWeight="Bold"
+                               Margin="0,10,0,5"/>
+                    <ListBox Grid.Row="3"
+                             Name="lstCsvColumns"/>
+                    <TextBlock Grid.Row="4"
+                               Text="選択テーブルの中身:"
+                               FontWeight="Bold"
+                               Margin="0,10,0,5"/>
+                    <DataGrid Grid.Row="5"
+                              Name="gridCsvPreview"
+                              AutoGenerateColumns="True"
+                              IsReadOnly="True"
+                              CanUserAddRows="False"
+                              CanUserDeleteRows="False"/>
+                </Grid>
+            </TabItem>
             
             <TabItem Header="図形定義">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">

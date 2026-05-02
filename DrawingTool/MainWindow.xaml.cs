@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -38,6 +39,8 @@ namespace DrawingTool
         private Dictionary<UIElement, List<SymbolAttribute>> drawingElementAttributes = new Dictionary<UIElement, List<SymbolAttribute>>();
         private Dictionary<UIElement, DrawingDataReference> drawingElementDataReferences = new Dictionary<UIElement, DrawingDataReference>();
         private Dictionary<string, DrawingDataReference> lineGroupDataReferences = new Dictionary<string, DrawingDataReference>();
+        private Dictionary<string, List<string>> csvTableColumns = new Dictionary<string, List<string>>();
+        private Dictionary<string, List<List<string>>> csvTableRows = new Dictionary<string, List<List<string>>>();
         private string selectedLineGroupKey = "";
         private LineConnectionInfo wireCSplitTargets = null;
 
@@ -1611,6 +1614,126 @@ namespace DrawingTool
                     GetCsvPath(directory, baseName, $"line_group_data_{definitionFileName}"),
                     CreateLineGroupDataCsvRowsByDefinition(saveData, definition));
             }
+        }
+
+        private void BtnRefreshCsvTables_Click(object sender, RoutedEventArgs e)
+        {
+            RefreshCsvTableList();
+        }
+
+        private void LstCsvTables_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            lstCsvColumns.Items.Clear();
+            gridCsvPreview.ItemsSource = null;
+            if (lstCsvTables.SelectedItem is not string tableName ||
+                !csvTableColumns.TryGetValue(tableName, out var columns))
+            {
+                return;
+            }
+
+            foreach (var column in columns)
+            {
+                lstCsvColumns.Items.Add(column);
+            }
+
+            if (csvTableRows.TryGetValue(tableName, out var rows))
+            {
+                gridCsvPreview.ItemsSource = CreateCsvPreviewDataTable(columns, rows).DefaultView;
+            }
+        }
+
+        private void RefreshCsvTableList()
+        {
+            var saveData = CreateSaveData();
+            csvTableColumns = CreateCsvTableColumns(saveData);
+            csvTableRows = CreateCsvTableRows(saveData);
+            lstCsvTables.Items.Clear();
+            lstCsvColumns.Items.Clear();
+            gridCsvPreview.ItemsSource = null;
+            foreach (var tableName in csvTableColumns.Keys.OrderBy(name => name))
+            {
+                lstCsvTables.Items.Add(tableName);
+            }
+        }
+
+        private DataTable CreateCsvPreviewDataTable(List<string> columns, List<List<string>> rows)
+        {
+            var table = new DataTable();
+            foreach (var column in columns)
+            {
+                table.Columns.Add(column);
+            }
+
+            foreach (var row in rows)
+            {
+                var values = columns
+                    .Select((_, index) => index < row.Count ? row[index] : "")
+                    .Cast<object>()
+                    .ToArray();
+                table.Rows.Add(values);
+            }
+
+            return table;
+        }
+
+        private Dictionary<string, List<string>> CreateCsvTableColumns(DrawingSaveData saveData)
+        {
+            var tables = new Dictionary<string, List<string>>
+            {
+                ["data_definitions"] = GetCsvHeader(CreateDataDefinitionCsvRows(saveData)),
+                ["shape_definitions"] = GetCsvHeader(CreateShapeDefinitionCsvRows(saveData)),
+                ["shape_connection_points"] = GetCsvHeader(CreateShapeConnectionPointCsvRows(saveData)),
+                ["shape_vector_elements"] = GetCsvHeader(CreateShapeVectorElementCsvRows(saveData)),
+                ["placed_items"] = GetCsvHeader(CreatePlacedItemCsvRows(saveData)),
+                ["line_groups"] = GetCsvHeader(CreateLineGroupCsvRows(saveData)),
+                ["connection_nodes"] = GetCsvHeader(CreateConnectionNodeCsvRows(saveData))
+            };
+
+            foreach (var definition in saveData.DataDefinitions)
+            {
+                string definitionFileName = CreateSafeFileNamePart(definition.Name);
+                tables[$"data_records_{definitionFileName}"] = GetCsvHeader(CreateDataRecordCsvRowsByDefinition(saveData, definition));
+                tables[$"placed_item_data_{definitionFileName}"] = GetCsvHeader(CreatePlacedItemDataCsvRowsByDefinition(saveData, definition));
+                tables[$"line_group_data_{definitionFileName}"] = GetCsvHeader(CreateLineGroupDataCsvRowsByDefinition(saveData, definition));
+            }
+
+            return tables;
+        }
+
+        private List<string> GetCsvHeader(IEnumerable<IEnumerable<string>> rows)
+        {
+            return rows.First().ToList();
+        }
+
+        private Dictionary<string, List<List<string>>> CreateCsvTableRows(DrawingSaveData saveData)
+        {
+            var tables = new Dictionary<string, List<List<string>>>
+            {
+                ["data_definitions"] = GetCsvBody(CreateDataDefinitionCsvRows(saveData)),
+                ["shape_definitions"] = GetCsvBody(CreateShapeDefinitionCsvRows(saveData)),
+                ["shape_connection_points"] = GetCsvBody(CreateShapeConnectionPointCsvRows(saveData)),
+                ["shape_vector_elements"] = GetCsvBody(CreateShapeVectorElementCsvRows(saveData)),
+                ["placed_items"] = GetCsvBody(CreatePlacedItemCsvRows(saveData)),
+                ["line_groups"] = GetCsvBody(CreateLineGroupCsvRows(saveData)),
+                ["connection_nodes"] = GetCsvBody(CreateConnectionNodeCsvRows(saveData))
+            };
+
+            foreach (var definition in saveData.DataDefinitions)
+            {
+                string definitionFileName = CreateSafeFileNamePart(definition.Name);
+                tables[$"data_records_{definitionFileName}"] = GetCsvBody(CreateDataRecordCsvRowsByDefinition(saveData, definition));
+                tables[$"placed_item_data_{definitionFileName}"] = GetCsvBody(CreatePlacedItemDataCsvRowsByDefinition(saveData, definition));
+                tables[$"line_group_data_{definitionFileName}"] = GetCsvBody(CreateLineGroupDataCsvRowsByDefinition(saveData, definition));
+            }
+
+            return tables;
+        }
+
+        private List<List<string>> GetCsvBody(IEnumerable<IEnumerable<string>> rows)
+        {
+            return rows.Skip(1)
+                .Select(row => row.ToList())
+                .ToList();
         }
 
         private string GetCsvPath(string directory, string baseName, string suffix)
