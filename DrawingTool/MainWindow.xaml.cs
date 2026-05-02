@@ -1,7 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -22,11 +25,20 @@ namespace DrawingTool
             public List<(Line Line, bool IsStart)> Endpoints { get; } = new List<(Line Line, bool IsStart)>();
         }
 
+        private class DrawingDataReference
+        {
+            public string DataDefinitionName { get; set; } = "";
+            public string DataId { get; set; } = "";
+        }
+
         private readonly MainWindowViewModel viewModel = new MainWindowViewModel();
         private Dictionary<Line, LineConnectionInfo> lineConnections = new Dictionary<Line, LineConnectionInfo>();
         private Dictionary<Line, ConnectionNode> lineStartNodes = new Dictionary<Line, ConnectionNode>();
         private Dictionary<Line, ConnectionNode> lineEndNodes = new Dictionary<Line, ConnectionNode>();
         private Dictionary<UIElement, List<SymbolAttribute>> drawingElementAttributes = new Dictionary<UIElement, List<SymbolAttribute>>();
+        private Dictionary<UIElement, DrawingDataReference> drawingElementDataReferences = new Dictionary<UIElement, DrawingDataReference>();
+        private Dictionary<string, DrawingDataReference> lineGroupDataReferences = new Dictionary<string, DrawingDataReference>();
+        private string selectedLineGroupKey = "";
         private LineConnectionInfo wireCSplitTargets = null;
 
         private bool isDrawingOrMoving = false;
@@ -138,8 +150,10 @@ namespace DrawingTool
         private void RefreshPlacedSymbols()
         {
             var placedDrawings = new List<PlacedDrawingInfo>();
+            var lineGroups = new List<PlacedDrawingInfo>();
 
             int no = 1;
+            int groupNo = 1;
 
             foreach (UIElement element in DrawCanvas.Children)
             {
@@ -148,6 +162,7 @@ namespace DrawingTool
                     def.Type == "Symbol")
                 {
                     int attributeCount = GetDrawingElementAttributes(symbolCanvas).Count;
+                    var dataRecord = GetDrawingElementDataRecord(symbolCanvas);
                     placedDrawings.Add(new PlacedDrawingInfo
                     {
                         No = no++,
@@ -161,6 +176,8 @@ namespace DrawingTool
                         GridHeightCount = def.GridHeightCount,
                         ConnectionPointCount = def.ConnectionPoints.Count,
                         AttributeCount = attributeCount,
+                        DataDefinitionName = dataRecord?.DefinitionName ?? "",
+                        DataId = dataRecord?.Name ?? "",
                         Element = symbolCanvas
                     });
                 }
@@ -169,6 +186,7 @@ namespace DrawingTool
                          lineDef.Type == "Line")
                 {
                     int attributeCount = GetDrawingElementAttributes(line).Count;
+                    var dataRecord = GetDrawingElementDataRecord(line);
                     placedDrawings.Add(new PlacedDrawingInfo
                     {
                         No = no++,
@@ -179,6 +197,8 @@ namespace DrawingTool
                         X2 = line.X2,
                         Y2 = line.Y2,
                         AttributeCount = attributeCount,
+                        DataDefinitionName = dataRecord?.DefinitionName ?? "",
+                        DataId = dataRecord?.Name ?? "",
                         Element = line
                     });
                 }
@@ -187,6 +207,7 @@ namespace DrawingTool
                          rectDef.Type == "Rectangle")
                 {
                     int attributeCount = GetDrawingElementAttributes(rectangle).Count;
+                    var dataRecord = GetDrawingElementDataRecord(rectangle);
                     placedDrawings.Add(new PlacedDrawingInfo
                     {
                         No = no++,
@@ -197,12 +218,32 @@ namespace DrawingTool
                         Width = rectangle.Width,
                         Height = rectangle.Height,
                         AttributeCount = attributeCount,
+                        DataDefinitionName = dataRecord?.DefinitionName ?? "",
+                        DataId = dataRecord?.Name ?? "",
                         Element = rectangle
                     });
                 }
             }
 
+            foreach (var group in GetLineGroupComponents())
+            {
+                string groupKey = GetLineGroupKey(group);
+                lineGroupDataReferences.TryGetValue(groupKey, out var reference);
+                lineGroups.Add(new PlacedDrawingInfo
+                {
+                    No = groupNo++,
+                    Id = ((ShapeDefinition)group[0].Tag).Id,
+                    Type = "LineGroup",
+                    IsLineGroup = true,
+                    LineGroupKey = groupKey,
+                    LineCount = group.Count,
+                    DataDefinitionName = reference?.DataDefinitionName ?? "",
+                    DataId = reference?.DataId ?? ""
+                });
+            }
+
             viewModel.RefreshPlacedDrawings(placedDrawings);
+            viewModel.RefreshLineGroups(lineGroups);
         }
 
         private void EditorCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) {
@@ -496,8 +537,10 @@ namespace DrawingTool
             lstDataDefinitions.Items.Refresh();
             cmbParentDataDefinition.Items.Refresh();
             cmbPlacedSymbolDataDefinition.Items.Refresh();
+            cmbLineGroupDataDefinition.Items.Refresh();
             cmbRecordDataDefinition.Items.Refresh();
             RefreshPlacedDataRecordChoices();
+            RefreshLineGroupDataRecordChoices();
             lstDataRecords.Items.Refresh();
         }
 
@@ -568,6 +611,7 @@ namespace DrawingTool
             viewModel.RegisterDataRecord(idValue, definition, attributes);
             lstDataRecords.Items.Refresh();
             RefreshPlacedDataRecordChoices();
+            RefreshLineGroupDataRecordChoices();
         }
 
         private void BtnLoadDataRecord_Click(object sender, RoutedEventArgs e)
@@ -613,6 +657,7 @@ namespace DrawingTool
             record.Attributes = attributes;
             lstDataRecords.Items.Refresh();
             RefreshPlacedDataRecordChoices();
+            RefreshLineGroupDataRecordChoices();
         }
 
         private void LoadDataRecordToEditor(DataRecord record)
@@ -919,6 +964,8 @@ namespace DrawingTool
             else if (rbLineWireB.IsChecked == true) role = LineRoleType.WireB;
             else if (rbLineWireC.IsChecked == true) role = LineRoleType.WireC;
             else if (rbLineBus.IsChecked == true) role = LineRoleType.Bus;
+            bool isLineGroupTarget = ((ComboBoxItem)cmbShapeType.SelectedItem).Tag.ToString() == "Line" &&
+                                     chkLineGroupTarget.IsChecked == true;
 
             viewModel.TempAttributes.Clear();
 
@@ -929,7 +976,8 @@ namespace DrawingTool
                 GetSymbolFixedHeight(),
                 GetSymbolGridWidthCount(),
                 GetSymbolGridHeightCount(),
-                role);
+                role,
+                isLineGroupTarget);
 
             if (def.Type == "Symbol")
             {
@@ -954,7 +1002,24 @@ namespace DrawingTool
 
         private void LstPlacedSymbols_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (lstPlacedSymbols.SelectedItem is not PlacedDrawingInfo placed || placed.Element == null)
+            if (lstPlacedSymbols.SelectedItem is not PlacedDrawingInfo placed)
+            {
+                return;
+            }
+
+            selectedLineGroupKey = "";
+            if (placed.IsLineGroup)
+            {
+                currentElement = null;
+                selectedLineGroupKey = placed.LineGroupKey;
+                rbSelect.IsChecked = true;
+                HideAllHandles();
+                HideSelectionHighlight();
+                LoadLineGroupDataAssignment(selectedLineGroupKey);
+                return;
+            }
+
+            if (placed.Element == null)
             {
                 return;
             }
@@ -976,6 +1041,11 @@ namespace DrawingTool
 
         private UIElement? GetSelectedPlacedElement()
         {
+            if (lstPlacedSymbols.SelectedItem is PlacedDrawingInfo placedGroup && placedGroup.IsLineGroup)
+            {
+                return null;
+            }
+
             if (lstPlacedSymbols.SelectedItem is PlacedDrawingInfo placed &&
                 placed.Element != null &&
                 IsSavedDrawingElement(placed.Element))
@@ -1046,11 +1116,116 @@ namespace DrawingTool
             }
         }
 
+        private void LstLineGroups_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (lstLineGroups.SelectedItem is not PlacedDrawingInfo group)
+            {
+                return;
+            }
+
+            selectedLineGroupKey = group.LineGroupKey;
+            currentElement = null;
+            rbSelect.IsChecked = true;
+            HideAllHandles();
+            HideSelectionHighlight();
+            lstPlacedSymbols.SelectedItem = null;
+            LoadLineGroupDataAssignmentToLineGroupTab(selectedLineGroupKey);
+        }
+
+        private void CmbLineGroupDataDefinition_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            RefreshLineGroupDataRecordChoices();
+        }
+
+        private void RefreshLineGroupDataRecordChoices()
+        {
+            var selectedRecord = cmbLineGroupDataRecord.SelectedItem as DataRecord;
+            if (cmbLineGroupDataDefinition.SelectedItem is not DataDefinition definition)
+            {
+                cmbLineGroupDataRecord.ItemsSource = null;
+                return;
+            }
+
+            var records = viewModel.DataRecords
+                .Where(record => record.DefinitionName == definition.Name)
+                .ToList();
+            cmbLineGroupDataRecord.ItemsSource = records;
+
+            if (selectedRecord != null && records.Contains(selectedRecord))
+            {
+                cmbLineGroupDataRecord.SelectedItem = selectedRecord;
+            }
+            else
+            {
+                cmbLineGroupDataRecord.SelectedItem = null;
+            }
+        }
+
+        private void BtnAssignDataRecordToLineGroup_Click(object sender, RoutedEventArgs e)
+        {
+            if (lstLineGroups.SelectedItem is not PlacedDrawingInfo group || string.IsNullOrWhiteSpace(group.LineGroupKey))
+            {
+                MessageBox.Show(this, "線グループ一覧から線グループを選択してください。", "線グループ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (cmbLineGroupDataDefinition.SelectedItem is not DataDefinition definition)
+            {
+                MessageBox.Show(this, "データ定義を選択してください。", "線グループ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (cmbLineGroupDataRecord.SelectedItem is not DataRecord record)
+            {
+                MessageBox.Show(this, "追加データを選択してください。", "線グループ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (record.DefinitionName != definition.Name)
+            {
+                MessageBox.Show(this, "選択したデータ定義と追加データの種別が一致していません。", "線グループ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            lineGroupDataReferences[group.LineGroupKey] = new DrawingDataReference
+            {
+                DataDefinitionName = record.DefinitionName,
+                DataId = record.Name
+            };
+            ApplyLineGroupDataReferenceToLines(group.LineGroupKey, record);
+            selectedLineGroupKey = group.LineGroupKey;
+            txtLineGroupAttributes.Text = FormatAttributesText(record.Attributes);
+            RefreshPlacedSymbols();
+        }
+
+        private void ApplyLineGroupDataReferenceToLines(string groupKey, DataRecord record)
+        {
+            var reference = new DrawingDataReference
+            {
+                DataDefinitionName = record.DefinitionName,
+                DataId = record.Name
+            };
+
+            foreach (var line in GetLinesForLineGroupKey(groupKey))
+            {
+                drawingElementDataReferences[line] = reference;
+                drawingElementAttributes.Remove(line);
+            }
+        }
+
+        private List<Line> GetLinesForLineGroupKey(string groupKey)
+        {
+            return GetLineGroupComponents()
+                .FirstOrDefault(group => GetLineGroupKey(group) == groupKey) ?? new List<Line>();
+        }
+
         private void BtnAssignDataRecordToPlaced_Click(object sender, RoutedEventArgs e)
         {
-            if (GetSelectedPlacedElement() is not UIElement element)
+            string lineGroupKey = GetSelectedLineGroupKey();
+            UIElement? element = GetSelectedPlacedElement();
+            if (element == null && string.IsNullOrWhiteSpace(lineGroupKey))
             {
-                MessageBox.Show(this, "配置済み図形一覧から図形を選択してください。", "対応情報", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(this, "配置済み図形一覧から図形または線グループを選択してください。", "対応情報", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
@@ -1072,22 +1247,35 @@ namespace DrawingTool
                 return;
             }
 
-            drawingElementAttributes[element] = record.Attributes.Select(CloneAttribute).ToList();
-            txtPlacedSymbolAttributes.Text = FormatAttributesText(drawingElementAttributes[element]);
+            var reference = new DrawingDataReference
+            {
+                DataDefinitionName = record.DefinitionName,
+                DataId = record.Name
+            };
+
+            if (!string.IsNullOrWhiteSpace(lineGroupKey))
+            {
+                lineGroupDataReferences[lineGroupKey] = reference;
+            }
+            else if (element != null)
+            {
+                drawingElementDataReferences[element] = reference;
+                drawingElementAttributes.Remove(element);
+            }
+
+            txtPlacedSymbolAttributes.Text = FormatAttributesText(record.Attributes);
             RefreshPlacedSymbols();
         }
 
-        private void LoadPlacedElementDataAssignment(UIElement element)
+        private void LoadLineGroupDataAssignment(string groupKey)
         {
-            var attributes = GetDrawingElementAttributes(element);
-            txtPlacedSymbolAttributes.Text = FormatAttributesText(attributes);
-
-            var record = FindDataRecordByAttributes(attributes);
+            var record = GetLineGroupDataRecord(groupKey);
             if (record == null)
             {
                 cmbPlacedSymbolDataDefinition.SelectedItem = null;
                 cmbPlacedDataRecord.ItemsSource = null;
                 cmbPlacedDataRecord.SelectedItem = null;
+                txtPlacedSymbolAttributes.Clear();
                 return;
             }
 
@@ -1095,6 +1283,69 @@ namespace DrawingTool
             cmbPlacedSymbolDataDefinition.SelectedItem = definition;
             RefreshPlacedDataRecordChoices();
             cmbPlacedDataRecord.SelectedItem = record;
+            txtPlacedSymbolAttributes.Text = FormatAttributesText(record.Attributes);
+        }
+
+        private void LoadLineGroupDataAssignmentToLineGroupTab(string groupKey)
+        {
+            var record = GetLineGroupDataRecord(groupKey);
+            if (record == null)
+            {
+                cmbLineGroupDataDefinition.SelectedItem = null;
+                cmbLineGroupDataRecord.ItemsSource = null;
+                cmbLineGroupDataRecord.SelectedItem = null;
+                txtLineGroupAttributes.Clear();
+                return;
+            }
+
+            var definition = viewModel.DataDefinitions.FirstOrDefault(item => item.Name == record.DefinitionName);
+            cmbLineGroupDataDefinition.SelectedItem = definition;
+            RefreshLineGroupDataRecordChoices();
+            cmbLineGroupDataRecord.SelectedItem = record;
+            txtLineGroupAttributes.Text = FormatAttributesText(record.Attributes);
+        }
+
+        private DataRecord? GetLineGroupDataRecord(string groupKey)
+        {
+            if (!lineGroupDataReferences.TryGetValue(groupKey, out var reference))
+            {
+                return null;
+            }
+
+            return viewModel.DataRecords.FirstOrDefault(record =>
+                record.DefinitionName == reference.DataDefinitionName &&
+                record.Name == reference.DataId);
+        }
+
+        private void LoadPlacedElementDataAssignment(UIElement element)
+        {
+            var record = GetDrawingElementDataRecord(element);
+            if (record == null)
+            {
+                cmbPlacedSymbolDataDefinition.SelectedItem = null;
+                cmbPlacedDataRecord.ItemsSource = null;
+                cmbPlacedDataRecord.SelectedItem = null;
+                txtPlacedSymbolAttributes.Text = FormatAttributesText(GetDrawingElementAttributes(element));
+                return;
+            }
+
+            var definition = viewModel.DataDefinitions.FirstOrDefault(item => item.Name == record.DefinitionName);
+            cmbPlacedSymbolDataDefinition.SelectedItem = definition;
+            RefreshPlacedDataRecordChoices();
+            cmbPlacedDataRecord.SelectedItem = record;
+            txtPlacedSymbolAttributes.Text = FormatAttributesText(record.Attributes);
+        }
+
+        private DataRecord? GetDrawingElementDataRecord(UIElement element)
+        {
+            if (drawingElementDataReferences.TryGetValue(element, out var reference))
+            {
+                return viewModel.DataRecords.FirstOrDefault(record =>
+                    record.DefinitionName == reference.DataDefinitionName &&
+                    record.Name == reference.DataId);
+            }
+
+            return FindDataRecordByAttributes(GetLegacyDrawingElementAttributes(element));
         }
 
         private DataRecord? FindDataRecordByAttributes(IEnumerable<SymbolAttribute> attributes)
@@ -1128,13 +1379,29 @@ namespace DrawingTool
             return null;
         }
 
+        private string GetSelectedLineGroupKey()
+        {
+            if (lstPlacedSymbols.SelectedItem is PlacedDrawingInfo placed && placed.IsLineGroup)
+            {
+                return placed.LineGroupKey;
+            }
+
+            return selectedLineGroupKey;
+        }
+
         private void LoadSymbolDefinitionToEditor(ShapeDefinition definition)
         {
             isLoadingSymbolDefinition = true;
             try
             {
                 txtShapeId.Text = definition.Id;
-                cmbShapeType.SelectedIndex = 2;
+                cmbShapeType.SelectedIndex = definition.Type == "Line" ? 0 : definition.Type == "Rectangle" ? 1 : 2;
+                chkLineGroupTarget.IsChecked = definition.IsLineGroupTarget;
+                rbLineNormal.IsChecked = definition.LineRole == LineRoleType.Normal;
+                rbLineWireA.IsChecked = definition.LineRole == LineRoleType.WireA;
+                rbLineWireB.IsChecked = definition.LineRole == LineRoleType.WireB;
+                rbLineWireC.IsChecked = definition.LineRole == LineRoleType.WireC;
+                rbLineBus.IsChecked = definition.LineRole == LineRoleType.Bus;
                 txtSymbolGridCount.Text = Math.Max(1, definition.GridWidthCount).ToString();
                 txtSymbolGridHeightCount.Text = Math.Max(1, definition.GridHeightCount).ToString();
 
@@ -1180,6 +1447,16 @@ namespace DrawingTool
         }
 
         private List<SymbolAttribute> GetDrawingElementAttributes(UIElement element)
+        {
+            if (GetDrawingElementDataRecord(element) is DataRecord record)
+            {
+                return record.Attributes.Select(CloneAttribute).ToList();
+            }
+
+            return GetLegacyDrawingElementAttributes(element);
+        }
+
+        private List<SymbolAttribute> GetLegacyDrawingElementAttributes(UIElement element)
         {
             if (drawingElementAttributes.TryGetValue(element, out var attributes))
             {
@@ -1227,6 +1504,7 @@ namespace DrawingTool
             activeHandle = null;
             wireCSplitTargets = null;
             drawingElementAttributes.Remove(deletedElement);
+            drawingElementDataReferences.Remove(deletedElement);
             HideAllHandles();
             HideSelectionHighlight();
             RefreshPlacedSymbols();
@@ -1280,6 +1558,426 @@ namespace DrawingTool
             MessageBox.Show(this, "保存しました。", "保存", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
+        private void BtnExportCsv_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new SaveFileDialog
+            {
+                Title = "CSV出力先を指定",
+                Filter = "CSV base file (*.csv)|*.csv|All files (*.*)|*.*",
+                DefaultExt = ".csv",
+                FileName = $"drawing-export-{DateTime.Now:yyyyMMdd-HHmmss}.csv"
+            };
+
+            if (dialog.ShowDialog(this) != true)
+            {
+                return;
+            }
+
+            try
+            {
+                var saveData = CreateSaveData();
+                ExportCsvFiles(saveData, dialog.FileName);
+                MessageBox.Show(this, "CSVを出力しました。", "CSV出力", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"CSV出力に失敗しました。\n{ex.Message}", "CSV出力", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void ExportCsvFiles(DrawingSaveData saveData, string baseFilePath)
+        {
+            string directory = System.IO.Path.GetDirectoryName(baseFilePath) ?? "";
+            string baseName = System.IO.Path.GetFileNameWithoutExtension(baseFilePath);
+
+            WriteCsvFile(GetCsvPath(directory, baseName, "data_definitions"), CreateDataDefinitionCsvRows(saveData));
+            WriteCsvFile(GetCsvPath(directory, baseName, "shape_definitions"), CreateShapeDefinitionCsvRows(saveData));
+            WriteCsvFile(GetCsvPath(directory, baseName, "shape_connection_points"), CreateShapeConnectionPointCsvRows(saveData));
+            WriteCsvFile(GetCsvPath(directory, baseName, "shape_vector_elements"), CreateShapeVectorElementCsvRows(saveData));
+            WriteCsvFile(GetCsvPath(directory, baseName, "placed_items"), CreatePlacedItemCsvRows(saveData));
+            WriteCsvFile(GetCsvPath(directory, baseName, "line_groups"), CreateLineGroupCsvRows(saveData));
+            WriteCsvFile(GetCsvPath(directory, baseName, "connection_nodes"), CreateConnectionNodeCsvRows(saveData));
+
+            foreach (var definition in saveData.DataDefinitions)
+            {
+                string definitionFileName = CreateSafeFileNamePart(definition.Name);
+                WriteCsvFile(
+                    GetCsvPath(directory, baseName, $"data_records_{definitionFileName}"),
+                    CreateDataRecordCsvRowsByDefinition(saveData, definition));
+                WriteCsvFile(
+                    GetCsvPath(directory, baseName, $"placed_item_data_{definitionFileName}"),
+                    CreatePlacedItemDataCsvRowsByDefinition(saveData, definition));
+                WriteCsvFile(
+                    GetCsvPath(directory, baseName, $"line_group_data_{definitionFileName}"),
+                    CreateLineGroupDataCsvRowsByDefinition(saveData, definition));
+            }
+        }
+
+        private string GetCsvPath(string directory, string baseName, string suffix)
+        {
+            return System.IO.Path.Combine(directory, $"{baseName}_{suffix}.csv");
+        }
+
+        private string CreateSafeFileNamePart(string value)
+        {
+            string safe = string.Join("_", value.Split(System.IO.Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim();
+            return string.IsNullOrWhiteSpace(safe) ? "unnamed" : safe;
+        }
+
+        private void WriteCsvFile(string path, IEnumerable<IEnumerable<string>> rows)
+        {
+            File.WriteAllLines(path, rows.Select(CreateCsvLine), new UTF8Encoding(true));
+        }
+
+        private string CreateCsvLine(IEnumerable<string> values)
+        {
+            return string.Join(",", values.Select(EscapeCsvValue));
+        }
+
+        private string EscapeCsvValue(string value)
+        {
+            value ??= "";
+            if (value.Contains('"') || value.Contains(',') || value.Contains('\r') || value.Contains('\n'))
+            {
+                return $"\"{value.Replace("\"", "\"\"")}\"";
+            }
+
+            return value;
+        }
+
+        private string CsvNumber(double value)
+        {
+            return value.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
+        private IEnumerable<IEnumerable<string>> CreateDataDefinitionCsvRows(DrawingSaveData saveData)
+        {
+            yield return new[] { "DefinitionName", "ParentDefinitionName", "IdItemName", "ItemOrder", "ItemName" };
+            foreach (var definition in saveData.DataDefinitions)
+            {
+                if (definition.Items.Count == 0)
+                {
+                    yield return new[] { definition.Name, definition.ParentDefinitionName, definition.IdItemName, "", "" };
+                    continue;
+                }
+
+                for (int i = 0; i < definition.Items.Count; i++)
+                {
+                    yield return new[] { definition.Name, definition.ParentDefinitionName, definition.IdItemName, (i + 1).ToString(CultureInfo.InvariantCulture), definition.Items[i] };
+                }
+            }
+        }
+
+        private IEnumerable<IEnumerable<string>> CreateDataRecordCsvRows(DrawingSaveData saveData)
+        {
+            yield return new[] { "DefinitionName", "DataId", "ItemName", "Value" };
+            foreach (var record in saveData.DataRecords)
+            {
+                if (record.Attributes.Count == 0)
+                {
+                    yield return new[] { record.DefinitionName, record.Name, "", "" };
+                    continue;
+                }
+
+                foreach (var attribute in record.Attributes)
+                {
+                    yield return new[] { record.DefinitionName, record.Name, attribute.Key, attribute.Value };
+                }
+            }
+        }
+
+        private IEnumerable<IEnumerable<string>> CreateDataRecordCsvRowsByDefinition(DrawingSaveData saveData, SavedDataDefinition definition)
+        {
+            var itemNames = GetSavedDataDefinitionItemsIncludingParents(saveData, definition);
+            yield return new[] { "DataId" }.Concat(itemNames);
+
+            foreach (var record in saveData.DataRecords.Where(record => record.DefinitionName == definition.Name))
+            {
+                var valueByKey = record.Attributes
+                    .GroupBy(attribute => attribute.Key)
+                    .ToDictionary(group => group.Key, group => group.First().Value);
+                yield return new[] { record.Name }
+                    .Concat(itemNames.Select(itemName => valueByKey.TryGetValue(itemName, out var value) ? value : ""));
+            }
+        }
+
+        private IEnumerable<IEnumerable<string>> CreateShapeDefinitionCsvRows(DrawingSaveData saveData)
+        {
+            yield return new[] { "DefinitionId", "Type", "LineRole", "IsLineGroupTarget", "GridWidthCount", "GridHeightCount", "FixedSize", "FixedHeight" };
+            foreach (var definition in saveData.ShapeDefinitions)
+            {
+                yield return new[]
+                {
+                    definition.Id,
+                    definition.Type,
+                    definition.LineRole,
+                    definition.IsLineGroupTarget ? "true" : "false",
+                    definition.GridWidthCount.ToString(CultureInfo.InvariantCulture),
+                    definition.GridHeightCount.ToString(CultureInfo.InvariantCulture),
+                    CsvNumber(definition.FixedSize),
+                    CsvNumber(definition.FixedHeight)
+                };
+            }
+        }
+
+        private IEnumerable<IEnumerable<string>> CreateShapeConnectionPointCsvRows(DrawingSaveData saveData)
+        {
+            yield return new[] { "DefinitionId", "PointOrder", "X", "Y" };
+            foreach (var definition in saveData.ShapeDefinitions)
+            {
+                for (int i = 0; i < definition.ConnectionPoints.Count; i++)
+                {
+                    var point = definition.ConnectionPoints[i];
+                    yield return new[] { definition.Id, (i + 1).ToString(CultureInfo.InvariantCulture), CsvNumber(point.X), CsvNumber(point.Y) };
+                }
+            }
+        }
+
+        private IEnumerable<IEnumerable<string>> CreateShapeVectorElementCsvRows(DrawingSaveData saveData)
+        {
+            yield return new[] { "DefinitionId", "ElementOrder", "Type", "X1", "Y1", "X2", "Y2" };
+            foreach (var definition in saveData.ShapeDefinitions)
+            {
+                for (int i = 0; i < definition.VectorElements.Count; i++)
+                {
+                    var element = definition.VectorElements[i];
+                    yield return new[]
+                    {
+                        definition.Id,
+                        (i + 1).ToString(CultureInfo.InvariantCulture),
+                        element.Type,
+                        CsvNumber(element.X1),
+                        CsvNumber(element.Y1),
+                        CsvNumber(element.X2),
+                        CsvNumber(element.Y2)
+                    };
+                }
+            }
+        }
+
+        private IEnumerable<IEnumerable<string>> CreatePlacedItemCsvRows(DrawingSaveData saveData)
+        {
+            yield return new[] { "ItemNo", "DefinitionId", "Type", "X", "Y", "X2", "Y2", "Width", "Height", "DataDefinitionName", "DataId", "StartNodeId", "EndNodeId" };
+            foreach (var item in saveData.Items)
+            {
+                yield return new[]
+                {
+                    item.ItemNo.ToString(CultureInfo.InvariantCulture),
+                    item.DefinitionId,
+                    item.Type,
+                    CsvNumber(item.X),
+                    CsvNumber(item.Y),
+                    CsvNumber(item.X2),
+                    CsvNumber(item.Y2),
+                    CsvNumber(item.Width),
+                    CsvNumber(item.Height),
+                    item.DataDefinitionName,
+                    item.DataId,
+                    item.StartNodeId?.ToString(CultureInfo.InvariantCulture) ?? "",
+                    item.EndNodeId?.ToString(CultureInfo.InvariantCulture) ?? ""
+                };
+            }
+        }
+
+        private IEnumerable<IEnumerable<string>> CreatePlacedItemDataCsvRows(DrawingSaveData saveData)
+        {
+            yield return new[] { "ItemNo", "DataDefinitionName", "DataId", "ItemName", "Value" };
+            foreach (var item in saveData.Items)
+            {
+                var matchedRecord = FindSavedDataRecordForItem(saveData, item);
+                string definitionName = matchedRecord?.DefinitionName ?? "";
+                string dataId = matchedRecord?.Name ?? "";
+
+                if (item.Attributes.Count == 0)
+                {
+                    yield return new[] { item.ItemNo.ToString(CultureInfo.InvariantCulture), definitionName, dataId, "", "" };
+                    continue;
+                }
+
+                foreach (var attribute in item.Attributes)
+                {
+                    yield return new[] { item.ItemNo.ToString(CultureInfo.InvariantCulture), definitionName, dataId, attribute.Key, attribute.Value };
+                }
+            }
+        }
+
+        private IEnumerable<IEnumerable<string>> CreateLineGroupCsvRows(DrawingSaveData saveData)
+        {
+            yield return new[] { "GroupNo", "DefinitionId", "LineItemNos", "DataDefinitionName", "DataId" };
+            foreach (var group in saveData.LineGroups)
+            {
+                yield return new[]
+                {
+                    group.GroupNo.ToString(CultureInfo.InvariantCulture),
+                    group.DefinitionId,
+                    string.Join(";", group.ItemNos),
+                    group.DataDefinitionName,
+                    group.DataId
+                };
+            }
+        }
+
+        private IEnumerable<IEnumerable<string>> CreateLineGroupDataCsvRowsByDefinition(DrawingSaveData saveData, SavedDataDefinition definition)
+        {
+            var itemNames = GetSavedDataDefinitionItemsIncludingParents(saveData, definition);
+            yield return new[] { "GroupNo", "DefinitionId", "LineItemNos", "DataId" }.Concat(itemNames);
+
+            foreach (var group in saveData.LineGroups.Where(group => group.DataDefinitionName == definition.Name))
+            {
+                var record = saveData.DataRecords.FirstOrDefault(record =>
+                    record.DefinitionName == group.DataDefinitionName &&
+                    record.Name == group.DataId);
+                var valueByKey = (record?.Attributes ?? new List<SavedSymbolAttribute>())
+                    .GroupBy(attribute => attribute.Key)
+                    .ToDictionary(attributeGroup => attributeGroup.Key, attributeGroup => attributeGroup.First().Value);
+
+                yield return new[]
+                    {
+                        group.GroupNo.ToString(CultureInfo.InvariantCulture),
+                        group.DefinitionId,
+                        string.Join(";", group.ItemNos),
+                        group.DataId
+                    }
+                    .Concat(itemNames.Select(itemName => valueByKey.TryGetValue(itemName, out var value) ? value : ""));
+            }
+        }
+
+        private IEnumerable<IEnumerable<string>> CreatePlacedItemDataCsvRowsByDefinition(DrawingSaveData saveData, SavedDataDefinition definition)
+        {
+            var itemNames = GetSavedDataDefinitionItemsIncludingParents(saveData, definition);
+            yield return new[] { "ItemNo", "DefinitionId", "Type", "DataId" }.Concat(itemNames);
+
+            foreach (var item in saveData.Items)
+            {
+                var matchedRecord = FindSavedDataRecordForItem(saveData, item);
+                if (matchedRecord?.DefinitionName != definition.Name)
+                {
+                    continue;
+                }
+
+                var valueByKey = matchedRecord.Attributes
+                    .GroupBy(attribute => attribute.Key)
+                    .ToDictionary(group => group.Key, group => group.First().Value);
+                yield return new[]
+                    {
+                        item.ItemNo.ToString(CultureInfo.InvariantCulture),
+                        item.DefinitionId,
+                        item.Type,
+                        matchedRecord.Name
+                    }
+                    .Concat(itemNames.Select(itemName => valueByKey.TryGetValue(itemName, out var value) ? value : ""));
+            }
+        }
+
+        private List<string> GetSavedDataDefinitionItemsIncludingParents(DrawingSaveData saveData, SavedDataDefinition definition)
+        {
+            var result = new List<string>();
+            var visitedDefinitions = new HashSet<string>();
+            AppendSavedDataDefinitionItems(saveData, definition, result, visitedDefinitions);
+            return result;
+        }
+
+        private void AppendSavedDataDefinitionItems(
+            DrawingSaveData saveData,
+            SavedDataDefinition definition,
+            List<string> result,
+            HashSet<string> visitedDefinitions)
+        {
+            if (!visitedDefinitions.Add(definition.Name))
+            {
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(definition.ParentDefinitionName))
+            {
+                var parent = saveData.DataDefinitions.FirstOrDefault(item => item.Name == definition.ParentDefinitionName);
+                if (parent != null)
+                {
+                    AppendSavedDataDefinitionItems(saveData, parent, result, visitedDefinitions);
+                }
+            }
+
+            foreach (var itemName in definition.Items)
+            {
+                if (!result.Contains(itemName))
+                {
+                    result.Add(itemName);
+                }
+            }
+        }
+
+        private SavedDataRecord? FindSavedDataRecordByAttributes(DrawingSaveData saveData, IEnumerable<SavedSymbolAttribute> attributes)
+        {
+            var attributeList = attributes.ToList();
+            foreach (var definition in saveData.DataDefinitions)
+            {
+                if (string.IsNullOrWhiteSpace(definition.IdItemName))
+                {
+                    continue;
+                }
+
+                string idValue = attributeList
+                    .FirstOrDefault(attribute => attribute.Key == definition.IdItemName)
+                    ?.Value
+                    .Trim() ?? "";
+                if (idValue.Length == 0)
+                {
+                    continue;
+                }
+
+                var record = saveData.DataRecords.FirstOrDefault(item =>
+                    item.DefinitionName == definition.Name &&
+                    item.Name == idValue);
+                if (record != null)
+                {
+                    return record;
+                }
+            }
+
+            return null;
+        }
+
+        private SavedDataRecord? FindSavedDataRecordForItem(DrawingSaveData saveData, SavedDrawingItem item)
+        {
+            if (!string.IsNullOrWhiteSpace(item.DataDefinitionName) && !string.IsNullOrWhiteSpace(item.DataId))
+            {
+                var record = saveData.DataRecords.FirstOrDefault(record =>
+                    record.DefinitionName == item.DataDefinitionName &&
+                    record.Name == item.DataId);
+                if (record != null)
+                {
+                    return record;
+                }
+            }
+
+            return FindSavedDataRecordByAttributes(saveData, item.Attributes);
+        }
+
+        private IEnumerable<IEnumerable<string>> CreateConnectionNodeCsvRows(DrawingSaveData saveData)
+        {
+            yield return new[] { "NodeId", "X", "Y", "EndpointItemNo", "EndpointIsStart" };
+            foreach (var node in saveData.ConnectionNodes)
+            {
+                if (node.Endpoints.Count == 0)
+                {
+                    yield return new[] { node.NodeId.ToString(CultureInfo.InvariantCulture), CsvNumber(node.X), CsvNumber(node.Y), "", "" };
+                    continue;
+                }
+
+                foreach (var endpoint in node.Endpoints)
+                {
+                    yield return new[]
+                    {
+                        node.NodeId.ToString(CultureInfo.InvariantCulture),
+                        CsvNumber(node.X),
+                        CsvNumber(node.Y),
+                        endpoint.ItemNo.ToString(CultureInfo.InvariantCulture),
+                        endpoint.IsStart ? "true" : "false"
+                    };
+                }
+            }
+        }
+
         private void BtnOpen_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new OpenFileDialog
@@ -1326,6 +2024,9 @@ namespace DrawingTool
             lineStartNodes.Clear();
             lineEndNodes.Clear();
             drawingElementAttributes.Clear();
+            drawingElementDataReferences.Clear();
+            lineGroupDataReferences.Clear();
+            selectedLineGroupKey = "";
 
             foreach (var element in DrawCanvas.Children.OfType<UIElement>().Where(IsSavedDrawingElement).ToList())
             {
@@ -1355,6 +2056,7 @@ namespace DrawingTool
 
             RestoreLineConnections(saveData, elementsByItemNo);
             RestoreConnectionNodes(saveData, elementsByItemNo);
+            RestoreLineGroups(saveData, elementsByItemNo);
 
             foreach (var line in elementsByItemNo.Values.OfType<Line>())
             {
@@ -1383,6 +2085,7 @@ namespace DrawingTool
                 GridWidthCount = gridWidthCount,
                 GridHeightCount = gridHeightCount,
                 LineRole = lineRole,
+                IsLineGroupTarget = savedDefinition.IsLineGroupTarget,
                 ConnectionPoints = savedDefinition.ConnectionPoints
                     .Select(point => new Point(point.X, point.Y))
                     .ToList(),
@@ -1484,7 +2187,7 @@ namespace DrawingTool
             if (item.Type == "Line")
             {
                 var line = CreateLineElement(definition, new Point(item.X, item.Y), new Point(item.X2, item.Y2));
-                drawingElementAttributes[line] = item.Attributes.Select(CreateAttribute).ToList();
+                RestoreDrawingDataAssignment(line, item);
                 return line;
             }
 
@@ -1496,15 +2199,44 @@ namespace DrawingTool
                 }
 
                 var symbol = CreateSymbolElement(definition, item.X, item.Y, item.Width, item.Height);
-                drawingElementAttributes[symbol] = item.Attributes.Count > 0
-                    ? item.Attributes.Select(CreateAttribute).ToList()
-                    : definition.Attributes.Select(CloneAttribute).ToList();
+                RestoreDrawingDataAssignment(symbol, item);
+                if (!drawingElementDataReferences.ContainsKey(symbol) && item.Attributes.Count == 0)
+                {
+                    drawingElementAttributes[symbol] = definition.Attributes.Select(CloneAttribute).ToList();
+                }
                 return symbol;
             }
 
             var rectangle = CreateRectangleElement(definition, item.X, item.Y, item.Width, item.Height);
-            drawingElementAttributes[rectangle] = item.Attributes.Select(CreateAttribute).ToList();
+            RestoreDrawingDataAssignment(rectangle, item);
             return rectangle;
+        }
+
+        private void RestoreDrawingDataAssignment(UIElement element, SavedDrawingItem item)
+        {
+            if (!string.IsNullOrWhiteSpace(item.DataDefinitionName) && !string.IsNullOrWhiteSpace(item.DataId))
+            {
+                drawingElementDataReferences[element] = new DrawingDataReference
+                {
+                    DataDefinitionName = item.DataDefinitionName,
+                    DataId = item.DataId
+                };
+                return;
+            }
+
+            var attributes = item.Attributes.Select(CreateAttribute).ToList();
+            var record = FindDataRecordByAttributes(attributes);
+            if (record != null)
+            {
+                drawingElementDataReferences[element] = new DrawingDataReference
+                {
+                    DataDefinitionName = record.DefinitionName,
+                    DataId = record.Name
+                };
+                return;
+            }
+
+            drawingElementAttributes[element] = attributes;
         }
 
         private Rectangle CreateRectangleElement(ShapeDefinition definition, double x, double y, double width, double height)
@@ -1646,6 +2378,30 @@ namespace DrawingTool
             }
         }
 
+        private void RestoreLineGroups(DrawingSaveData saveData, Dictionary<int, UIElement> elementsByItemNo)
+        {
+            foreach (var savedGroup in saveData.LineGroups)
+            {
+                var lines = savedGroup.ItemNos
+                    .Select(itemNo => elementsByItemNo.TryGetValue(itemNo, out var element) ? element as Line : null)
+                    .Where(line => line != null)
+                    .Cast<Line>()
+                    .ToList();
+                if (lines.Count < 2 ||
+                    string.IsNullOrWhiteSpace(savedGroup.DataDefinitionName) ||
+                    string.IsNullOrWhiteSpace(savedGroup.DataId))
+                {
+                    continue;
+                }
+
+                lineGroupDataReferences[GetLineGroupKey(lines)] = new DrawingDataReference
+                {
+                    DataDefinitionName = savedGroup.DataDefinitionName,
+                    DataId = savedGroup.DataId
+                };
+            }
+        }
+
         private DrawingSaveData CreateSaveData()
         {
             var saveData = new DrawingSaveData();
@@ -1678,6 +2434,7 @@ namespace DrawingTool
                     GridWidthCount = definition.GridWidthCount,
                     GridHeightCount = definition.GridHeightCount,
                     LineRole = definition.LineRole.ToString(),
+                    IsLineGroupTarget = definition.IsLineGroupTarget,
                     ConnectionPoints = definition.ConnectionPoints
                         .Select(point => new SavedPoint { X = point.X, Y = point.Y })
                         .ToList(),
@@ -1730,6 +2487,25 @@ namespace DrawingTool
                 });
             }
 
+            int groupNo = 1;
+            foreach (var group in GetLineGroupComponents())
+            {
+                string groupKey = GetLineGroupKey(group);
+                lineGroupDataReferences.TryGetValue(groupKey, out var reference);
+                saveData.LineGroups.Add(new SavedLineGroup
+                {
+                    GroupNo = groupNo++,
+                    DefinitionId = ((ShapeDefinition)group[0].Tag).Id,
+                    ItemNos = group
+                        .Where(line => itemNumbers.ContainsKey(line))
+                        .Select(line => itemNumbers[line])
+                        .OrderBy(itemNoValue => itemNoValue)
+                        .ToList(),
+                    DataDefinitionName = reference?.DataDefinitionName ?? "",
+                    DataId = reference?.DataId ?? ""
+                });
+            }
+
             foreach (var itemPair in itemNumbers.OrderBy(pair => pair.Value))
             {
                 saveData.Items.Add(CreateSavedDrawingItem(itemPair.Key, itemPair.Value, itemNumbers, nodeNumbers));
@@ -1749,6 +2525,114 @@ namespace DrawingTool
             };
         }
 
+        private List<List<Line>> GetLineGroupComponents()
+        {
+            var lines = DrawCanvas.Children
+                .OfType<Line>()
+                .Where(IsLineGroupCandidate)
+                .ToList();
+            var adjacency = lines.ToDictionary(line => line, _ => new HashSet<Line>());
+
+            foreach (var node in lineStartNodes.Values.Concat(lineEndNodes.Values).Distinct())
+            {
+                var nodeLines = node.Endpoints
+                    .Select(endpoint => endpoint.Line)
+                    .Where(line => adjacency.ContainsKey(line))
+                    .ToList();
+                ConnectSameDefinitionLines(nodeLines, adjacency);
+            }
+
+            foreach (var pair in lineConnections)
+            {
+                if (!adjacency.ContainsKey(pair.Key))
+                {
+                    continue;
+                }
+
+                AddLineGroupEdge(pair.Key, pair.Value.StartElement as Line, adjacency);
+                AddLineGroupEdge(pair.Key, pair.Value.EndElement as Line, adjacency);
+            }
+
+            var result = new List<List<Line>>();
+            var visited = new HashSet<Line>();
+            foreach (var line in lines)
+            {
+                if (!visited.Add(line))
+                {
+                    continue;
+                }
+
+                var component = new List<Line>();
+                var stack = new Stack<Line>();
+                stack.Push(line);
+                while (stack.Count > 0)
+                {
+                    var current = stack.Pop();
+                    component.Add(current);
+                    foreach (var next in adjacency[current])
+                    {
+                        if (visited.Add(next))
+                        {
+                            stack.Push(next);
+                        }
+                    }
+                }
+
+                if (component.Count >= 1)
+                {
+                    result.Add(component);
+                }
+            }
+
+            return result;
+        }
+
+        private bool IsLineGroupCandidate(Line line)
+        {
+            return line.Tag is ShapeDefinition definition &&
+                   definition.Type == "Line" &&
+                   definition.IsLineGroupTarget;
+        }
+
+        private void ConnectSameDefinitionLines(List<Line> lines, Dictionary<Line, HashSet<Line>> adjacency)
+        {
+            for (int i = 0; i < lines.Count; i++)
+            {
+                for (int j = i + 1; j < lines.Count; j++)
+                {
+                    AddLineGroupEdge(lines[i], lines[j], adjacency);
+                }
+            }
+        }
+
+        private void AddLineGroupEdge(Line line, Line? otherLine, Dictionary<Line, HashSet<Line>> adjacency)
+        {
+            if (otherLine == null ||
+                !adjacency.ContainsKey(line) ||
+                !adjacency.ContainsKey(otherLine) ||
+                !HaveSameDefinitionId(line, otherLine))
+            {
+                return;
+            }
+
+            adjacency[line].Add(otherLine);
+            adjacency[otherLine].Add(line);
+        }
+
+        private bool HaveSameDefinitionId(Line first, Line second)
+        {
+            return first.Tag is ShapeDefinition firstDefinition &&
+                   second.Tag is ShapeDefinition secondDefinition &&
+                   firstDefinition.Id == secondDefinition.Id;
+        }
+
+        private string GetLineGroupKey(IEnumerable<Line> lines)
+        {
+            return string.Join("|", lines
+                .Select(line => RuntimeHelpers.GetHashCode(line).ToString(CultureInfo.InvariantCulture))
+                .OrderBy(value => value));
+        }
+
         private SavedDrawingItem CreateSavedDrawingItem(
             UIElement element,
             int itemNo,
@@ -1762,6 +2646,7 @@ namespace DrawingTool
                 DefinitionId = definition.Id,
                 Type = definition.Type
             };
+            ApplySavedDrawingDataReference(element, item);
 
             if (element is Canvas canvas)
             {
@@ -1772,9 +2657,7 @@ namespace DrawingTool
                 item.VectorElements = definition.VectorElements
                     .Select(CreateSavedVectorElement)
                     .ToList();
-                item.Attributes = GetDrawingElementAttributes(canvas)
-                    .Select(CreateSavedAttribute)
-                    .ToList();
+                item.Attributes = CreateSavedLegacyAttributes(canvas);
             }
             else if (element is Rectangle rectangle)
             {
@@ -1782,9 +2665,7 @@ namespace DrawingTool
                 item.Y = Canvas.GetTop(rectangle);
                 item.Width = rectangle.Width;
                 item.Height = rectangle.Height;
-                item.Attributes = GetDrawingElementAttributes(rectangle)
-                    .Select(CreateSavedAttribute)
-                    .ToList();
+                item.Attributes = CreateSavedLegacyAttributes(rectangle);
             }
             else if (element is Line line)
             {
@@ -1792,9 +2673,7 @@ namespace DrawingTool
                 item.Y = line.Y1;
                 item.X2 = line.X2;
                 item.Y2 = line.Y2;
-                item.Attributes = GetDrawingElementAttributes(line)
-                    .Select(CreateSavedAttribute)
-                    .ToList();
+                item.Attributes = CreateSavedLegacyAttributes(line);
 
                 if (GetEndpointNode(line, true) is ConnectionNode startNode && nodeNumbers.TryGetValue(startNode, out int startNodeId))
                 {
@@ -1814,6 +2693,30 @@ namespace DrawingTool
             }
 
             return item;
+        }
+
+        private void ApplySavedDrawingDataReference(UIElement element, SavedDrawingItem item)
+        {
+            var record = GetDrawingElementDataRecord(element);
+            if (record == null)
+            {
+                return;
+            }
+
+            item.DataDefinitionName = record.DefinitionName;
+            item.DataId = record.Name;
+        }
+
+        private List<SavedSymbolAttribute> CreateSavedLegacyAttributes(UIElement element)
+        {
+            if (GetDrawingElementDataRecord(element) != null)
+            {
+                return new List<SavedSymbolAttribute>();
+            }
+
+            return GetLegacyDrawingElementAttributes(element)
+                .Select(CreateSavedAttribute)
+                .ToList();
         }
 
         private SavedLineEndpointConnection? CreateSavedEndpointConnection(

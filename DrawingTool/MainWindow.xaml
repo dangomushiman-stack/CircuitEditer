@@ -11,6 +11,7 @@
             <Separator/>
             <Button Content="開く" Click="BtnOpen_Click" Padding="12,3" Margin="10,0,0,0"/>
             <Button Content="保存" Click="BtnSave_Click" Padding="12,3" Margin="10,0,0,0"/>
+            <Button Content="CSV出力" Click="BtnExportCsv_Click" Padding="12,3" Margin="10,0,0,0"/>
             <Button Content="選択図形を削除" Click="BtnDeleteSelected_Click" Padding="12,3" Margin="10,0,0,0"/>
         </ToolBar>
 
@@ -95,6 +96,56 @@
                     </StackPanel>
                 </Grid>
             </TabItem>
+
+            <TabItem Header="線グループ">
+                <Grid Margin="5">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0"
+                               Text="グループ化対象の線グループ:"
+                               Margin="0,0,0,5"
+                               FontWeight="Bold"/>
+                    <ListBox Grid.Row="1"
+                             Name="lstLineGroups"
+                             ItemsSource="{Binding LineGroups}"
+                             DisplayMemberPath="DisplayText"
+                             SelectionChanged="LstLineGroups_SelectionChanged"/>
+
+                    <TextBlock Grid.Row="2"
+                               Text="選択した線グループの対応情報:"
+                               Margin="0,10,0,5"
+                               FontWeight="Bold"/>
+                    <StackPanel Grid.Row="3">
+                        <ComboBox Name="cmbLineGroupDataDefinition"
+                                  ItemsSource="{Binding DataDefinitions}"
+                                  DisplayMemberPath="DisplayText"
+                                  SelectionChanged="CmbLineGroupDataDefinition_SelectionChanged"
+                                  Margin="0,0,0,5"
+                                  Padding="2"/>
+                        <ComboBox Name="cmbLineGroupDataRecord"
+                                  DisplayMemberPath="DisplayText"
+                                  Margin="0,0,0,5"
+                                  Padding="2"/>
+                        <Button Content="追加データを線グループへ割付"
+                                Click="BtnAssignDataRecordToLineGroup_Click"
+                                Padding="6,2"
+                                Margin="0,0,0,5"/>
+                        <TextBlock Text="割付済み対応情報:" Margin="0,0,0,2"/>
+                        <TextBox Name="txtLineGroupAttributes"
+                                 Height="90"
+                                 IsReadOnly="True"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 Margin="0,0,0,5"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
             
             <TabItem Header="図形定義">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -118,6 +169,7 @@
                             <RadioButton Name="rbLineWireB" Content="接続線B (Aの条件＋他の接続線Bにも吸着)" Foreground="DeepPink" Margin="10,2,5,2"/>
                             <RadioButton Name="rbLineWireC" Content="接続線C (線に結合して相手線を分割)" Foreground="DarkCyan" Margin="10,2,5,2"/>
                             <RadioButton Name="rbLineBus" Content="バス (中途への接続を受け入れる)" Foreground="Purple" Margin="10,2,5,5"/>
+                            <CheckBox Name="chkLineGroupTarget" Content="同種接続線のグループ化対象にする" Margin="10,6,5,5"/>
                         </StackPanel>
 
                         <StackPanel Name="SymbolSettings" Visibility="Collapsed">

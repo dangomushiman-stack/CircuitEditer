@@ -11,6 +11,7 @@ namespace DrawingTool.ViewModels
         public ObservableCollection<ShapeDefinition> RegisteredShapes { get; } = new ObservableCollection<ShapeDefinition>();
         public ObservableCollection<ShapeDefinition> RegisteredSymbols { get; } = new ObservableCollection<ShapeDefinition>();
         public ObservableCollection<PlacedDrawingInfo> PlacedSymbols { get; } = new ObservableCollection<PlacedDrawingInfo>();
+        public ObservableCollection<PlacedDrawingInfo> LineGroups { get; } = new ObservableCollection<PlacedDrawingInfo>();
         public ObservableCollection<DataDefinition> DataDefinitions { get; } = new ObservableCollection<DataDefinition>();
         public ObservableCollection<DataRecord> DataRecords { get; } = new ObservableCollection<DataRecord>();
         public List<Point> TempConnectionPoints { get; } = new List<Point>();
@@ -57,7 +58,7 @@ namespace DrawingTool.ViewModels
             RegisteredShapes.Add(new ShapeDefinition { Id = "RECT-01", Type = "Rectangle" });
         }
 
-        public ShapeDefinition RegisterShape(string id, string type, double fixedSize, double fixedHeight, int gridWidthCount, int gridHeightCount, LineRoleType lineRole)
+        public ShapeDefinition RegisterShape(string id, string type, double fixedSize, double fixedHeight, int gridWidthCount, int gridHeightCount, LineRoleType lineRole, bool isLineGroupTarget)
         {
             var definition = new ShapeDefinition
             {
@@ -85,7 +86,8 @@ namespace DrawingTool.ViewModels
                         Value = attribute.Value
                     })
                     .ToList(),
-                LineRole = lineRole
+                LineRole = lineRole,
+                IsLineGroupTarget = isLineGroupTarget
             };
 
             RegisteredShapes.Add(definition);
@@ -120,6 +122,15 @@ namespace DrawingTool.ViewModels
             foreach (var drawing in drawings)
             {
                 PlacedSymbols.Add(drawing);
+            }
+        }
+
+        public void RefreshLineGroups(IEnumerable<PlacedDrawingInfo> groups)
+        {
+            LineGroups.Clear();
+            foreach (var group in groups)
+            {
+                LineGroups.Add(group);
             }
         }
 

@@ -17,12 +17,14 @@ namespace DrawingTool.Models
         public List<SymbolAttribute> Attributes { get; set; } = new List<SymbolAttribute>();
 
         public LineRoleType LineRole { get; set; } = LineRoleType.Normal;
+        public bool IsLineGroupTarget { get; set; }
 
         public string DisplayText => $"[{Id}] {Type}" +
             (Type == "Symbol" ? $" ({GridWidthCount}x{GridHeightCount} grid / {ConnectionPoints.Count} ports / {VectorElements.Count} vectors / {Attributes.Count} attrs)" : "") +
             (Type == "Line" && LineRole == LineRoleType.WireA ? " (WireA)" : "") +
             (Type == "Line" && LineRole == LineRoleType.WireB ? " (WireB)" : "") +
             (Type == "Line" && LineRole == LineRoleType.WireC ? " (WireC)" : "") +
-            (Type == "Line" && LineRole == LineRoleType.Bus ? " (Bus)" : "");
+            (Type == "Line" && LineRole == LineRoleType.Bus ? " (Bus)" : "") +
+            (Type == "Line" && IsLineGroupTarget ? " (GroupTarget)" : "");
     }
 }

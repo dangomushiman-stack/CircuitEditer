@@ -9,6 +9,7 @@ namespace DrawingTool.Models
         public List<SavedDataDefinition> DataDefinitions { get; set; } = new List<SavedDataDefinition>();
         public List<SavedDataRecord> DataRecords { get; set; } = new List<SavedDataRecord>();
         public List<SavedDrawingItem> Items { get; set; } = new List<SavedDrawingItem>();
+        public List<SavedLineGroup> LineGroups { get; set; } = new List<SavedLineGroup>();
         public List<SavedConnectionNode> ConnectionNodes { get; set; } = new List<SavedConnectionNode>();
     }
 
@@ -36,9 +37,19 @@ namespace DrawingTool.Models
         public int GridWidthCount { get; set; }
         public int GridHeightCount { get; set; }
         public string LineRole { get; set; } = "";
+        public bool IsLineGroupTarget { get; set; }
         public List<SavedPoint> ConnectionPoints { get; set; } = new List<SavedPoint>();
         public List<SavedSymbolVectorElement> VectorElements { get; set; } = new List<SavedSymbolVectorElement>();
         public List<SavedSymbolAttribute> Attributes { get; set; } = new List<SavedSymbolAttribute>();
+    }
+
+    public class SavedLineGroup
+    {
+        public int GroupNo { get; set; }
+        public string DefinitionId { get; set; } = "";
+        public List<int> ItemNos { get; set; } = new List<int>();
+        public string DataDefinitionName { get; set; } = "";
+        public string DataId { get; set; } = "";
     }
 
     public class SavedSymbolAttribute
@@ -69,6 +80,8 @@ namespace DrawingTool.Models
         public double Height { get; set; }
         public List<SavedSymbolVectorElement> VectorElements { get; set; } = new List<SavedSymbolVectorElement>();
         public List<SavedSymbolAttribute> Attributes { get; set; } = new List<SavedSymbolAttribute>();
+        public string DataDefinitionName { get; set; } = "";
+        public string DataId { get; set; } = "";
         public int? StartNodeId { get; set; }
         public int? EndNodeId { get; set; }
         public SavedLineEndpointConnection? StartConnection { get; set; }
