@@ -17,7 +17,7 @@ namespace DrawingTool.ViewModels
         public List<Point> TempConnectionPoints { get; } = new List<Point>();
         public List<SymbolVectorElement> TempVectorElements { get; } = new List<SymbolVectorElement>();
         public List<SymbolAttribute> TempAttributes { get; } = new List<SymbolAttribute>();
-        public ObservableCollection<string> TempDataItems { get; } = new ObservableCollection<string>();
+        public ObservableCollection<DataDefinitionItem> TempDataItems { get; } = new ObservableCollection<DataDefinitionItem>();
 
         private ShapeDefinition? selectedShape;
         private ShapeDefinition? selectedRegisteredSymbol;
@@ -152,17 +152,29 @@ namespace DrawingTool.ViewModels
             SelectedRegisteredSymbol = RegisteredSymbols.FirstOrDefault();
         }
 
-        public DataDefinition RegisterDataDefinition(string name, string parentDefinitionName, string idItemName)
+        public DataDefinition RegisterDataDefinition(
+            string name,
+            string parentDefinitionName,
+            string idItemName,
+            bool usePythonIdGenerator,
+            string pythonIdGeneratorCode)
         {
             var definition = new DataDefinition
             {
                 Name = name,
                 ParentDefinitionName = parentDefinitionName,
-                IdItemName = idItemName
+                IdItemName = idItemName,
+                UsePythonIdGenerator = usePythonIdGenerator,
+                PythonIdGeneratorCode = pythonIdGeneratorCode
             };
             foreach (var item in TempDataItems)
             {
-                definition.Items.Add(item);
+                definition.Items.Add(item.Name);
+                definition.ItemDefinitions.Add(new DataDefinitionItem
+                {
+                    Name = item.Name,
+                    ReferenceDefinitionName = item.ReferenceDefinitionName
+                });
             }
 
             DataDefinitions.Add(definition);

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -320,21 +321,94 @@ namespace DrawingTool
         private void BtnAddDataItem_Click(object sender, RoutedEventArgs e)
         {
             string itemName = txtDataItemName.Text.Trim();
-            if (itemName.Length == 0 || viewModel.TempDataItems.Contains(itemName))
+            if (itemName.Length == 0 || viewModel.TempDataItems.Any(item => item.Name == itemName))
             {
                 return;
             }
 
-            viewModel.TempDataItems.Add(itemName);
+            var isReferenceItem = chkDataItemIsReference.IsChecked == true;
+            if (isReferenceItem && cmbDataItemReferenceDefinition.SelectedItem is not DataDefinition)
+            {
+                MessageBox.Show(this, "他データのID項目にする場合は、参照先データ定義を選択してください。", "データ定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            viewModel.TempDataItems.Add(new DataDefinitionItem
+            {
+                Name = itemName,
+                ReferenceDefinitionName = isReferenceItem && cmbDataItemReferenceDefinition.SelectedItem is DataDefinition referenceDefinition
+                    ? referenceDefinition.Name
+                    : ""
+            });
             txtDataItemName.Clear();
+            chkDataItemIsReference.IsChecked = false;
+            cmbDataItemReferenceDefinition.SelectedItem = null;
+        }
+
+        private void LstTempDataItems_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (lstTempDataItems.SelectedItem is not DataDefinitionItem item)
+            {
+                return;
+            }
+
+            txtDataItemName.Text = item.Name;
+            chkDataItemIsReference.IsChecked = !string.IsNullOrWhiteSpace(item.ReferenceDefinitionName);
+            cmbDataItemReferenceDefinition.SelectedItem = viewModel.DataDefinitions
+                .FirstOrDefault(definition => definition.Name == item.ReferenceDefinitionName);
+        }
+
+        private void BtnUpdateDataItem_Click(object sender, RoutedEventArgs e)
+        {
+            if (lstTempDataItems.SelectedItem is not DataDefinitionItem selectedItem)
+            {
+                MessageBox.Show(this, "変更する項目を選択してください。", "データ定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            string itemName = txtDataItemName.Text.Trim();
+            if (itemName.Length == 0)
+            {
+                MessageBox.Show(this, "項目名を入力してください。", "データ定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (viewModel.TempDataItems.Any(item => item != selectedItem && item.Name == itemName))
+            {
+                MessageBox.Show(this, "同じ項目名が既にあります。", "データ定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var isReferenceItem = chkDataItemIsReference.IsChecked == true;
+            if (isReferenceItem && cmbDataItemReferenceDefinition.SelectedItem is not DataDefinition)
+            {
+                MessageBox.Show(this, "他データのID項目にする場合は、参照先データ定義を選択してください。", "データ定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            string oldItemName = selectedItem.Name;
+            int selectedIndex = viewModel.TempDataItems.IndexOf(selectedItem);
+            var updatedItem = new DataDefinitionItem
+            {
+                Name = itemName,
+                ReferenceDefinitionName = isReferenceItem && cmbDataItemReferenceDefinition.SelectedItem is DataDefinition referenceDefinition
+                    ? referenceDefinition.Name
+                    : ""
+            };
+            viewModel.TempDataItems[selectedIndex] = updatedItem;
+            lstTempDataItems.SelectedItem = updatedItem;
+            if ((cmbDataDefinitionIdItem.SelectedValue as string) == oldItemName)
+            {
+                cmbDataDefinitionIdItem.SelectedValue = itemName;
+            }
         }
 
         private void BtnRemoveDataItem_Click(object sender, RoutedEventArgs e)
         {
-            if (lstTempDataItems.SelectedItem is string itemName)
+            if (lstTempDataItems.SelectedItem is DataDefinitionItem item)
             {
-                viewModel.TempDataItems.Remove(itemName);
-                if (cmbDataDefinitionIdItem.SelectedItem as string == itemName)
+                viewModel.TempDataItems.Remove(item);
+                if ((cmbDataDefinitionIdItem.SelectedValue as string) == item.Name)
                 {
                     cmbDataDefinitionIdItem.SelectedItem = null;
                 }
@@ -345,6 +419,12 @@ namespace DrawingTool
         {
             viewModel.TempDataItems.Clear();
             cmbDataDefinitionIdItem.SelectedItem = null;
+        }
+
+        private void BtnClearDataItemReferenceDefinition_Click(object sender, RoutedEventArgs e)
+        {
+            chkDataItemIsReference.IsChecked = false;
+            cmbDataItemReferenceDefinition.SelectedItem = null;
         }
 
         private void BtnClearParentDataDefinition_Click(object sender, RoutedEventArgs e)
@@ -372,7 +452,12 @@ namespace DrawingTool
                 return;
             }
 
-            viewModel.RegisterDataDefinition(name, parentDefinitionName, idItemName);
+            viewModel.RegisterDataDefinition(
+                name,
+                parentDefinitionName,
+                idItemName,
+                chkUsePythonIdGenerator.IsChecked == true,
+                txtPythonIdGeneratorCode.Text);
             RefreshDataDefinitionViews();
         }
 
@@ -414,15 +499,23 @@ namespace DrawingTool
             }
 
             string oldName = definition.Name;
+            var itemRenameMap = CreateDataDefinitionItemRenameMap(
+                GetDataDefinitionOwnItems(definition),
+                viewModel.TempDataItems.ToList());
             definition.Name = name;
             definition.ParentDefinitionName = parentDefinitionName;
             definition.IdItemName = idItemName;
+            definition.UsePythonIdGenerator = chkUsePythonIdGenerator.IsChecked == true;
+            definition.PythonIdGeneratorCode = txtPythonIdGeneratorCode.Text;
             definition.Items.Clear();
+            definition.ItemDefinitions.Clear();
             foreach (var item in viewModel.TempDataItems)
             {
-                definition.Items.Add(item);
+                definition.Items.Add(item.Name);
+                definition.ItemDefinitions.Add(CloneDataDefinitionItem(item));
             }
 
+            RenameDataRecordAttributeKeys(oldName, itemRenameMap);
             UpdateDataDefinitionReferences(oldName, name);
             SyncDataRecordIdsForDefinition(definition);
             RefreshDataDefinitionViews();
@@ -434,12 +527,15 @@ namespace DrawingTool
             cmbParentDataDefinition.SelectedItem = viewModel.DataDefinitions
                 .FirstOrDefault(item => item.Name == definition.ParentDefinitionName);
             viewModel.TempDataItems.Clear();
-            foreach (var item in definition.Items)
+            foreach (var item in GetDataDefinitionOwnItems(definition))
             {
-                viewModel.TempDataItems.Add(item);
+                viewModel.TempDataItems.Add(CloneDataDefinitionItem(item));
             }
-            cmbDataDefinitionIdItem.SelectedItem = viewModel.TempDataItems
-                .FirstOrDefault(item => item == definition.IdItemName);
+            cmbDataDefinitionIdItem.SelectedValue = viewModel.TempDataItems
+                .FirstOrDefault(item => item.Name == definition.IdItemName)
+                ?.Name;
+            chkUsePythonIdGenerator.IsChecked = definition.UsePythonIdGenerator;
+            txtPythonIdGeneratorCode.Text = definition.PythonIdGeneratorCode;
         }
 
         private string GetSelectedParentDataDefinitionName()
@@ -449,14 +545,57 @@ namespace DrawingTool
                 : "";
         }
 
+        private List<DataDefinitionItem> GetDataDefinitionOwnItems(DataDefinition definition)
+        {
+            if (definition.ItemDefinitions.Count > 0)
+            {
+                return definition.ItemDefinitions.ToList();
+            }
+
+            return definition.Items
+                .Select(itemName => new DataDefinitionItem { Name = itemName })
+                .ToList();
+        }
+
+        private DataDefinitionItem CloneDataDefinitionItem(DataDefinitionItem item)
+        {
+            return new DataDefinitionItem
+            {
+                Name = item.Name,
+                ReferenceDefinitionName = item.ReferenceDefinitionName
+            };
+        }
+
+        private Dictionary<string, string> CreateDataDefinitionItemRenameMap(
+            IReadOnlyList<DataDefinitionItem> oldItems,
+            IReadOnlyList<DataDefinitionItem> newItems)
+        {
+            var renameMap = new Dictionary<string, string>();
+            int count = Math.Min(oldItems.Count, newItems.Count);
+            for (int i = 0; i < count; i++)
+            {
+                string oldName = oldItems[i].Name;
+                string newName = newItems[i].Name;
+                if (!string.IsNullOrWhiteSpace(oldName) &&
+                    !string.IsNullOrWhiteSpace(newName) &&
+                    oldName != newName &&
+                    !renameMap.ContainsKey(oldName))
+                {
+                    renameMap[oldName] = newName;
+                }
+            }
+
+            return renameMap;
+        }
+
         private string GetSelectedDataDefinitionIdItemName()
         {
-            return cmbDataDefinitionIdItem.SelectedItem is string itemName ? itemName : "";
+            return cmbDataDefinitionIdItem.SelectedValue as string ?? "";
         }
 
         private bool ValidateDataDefinitionIdItem(string idItemName)
         {
-            if (!string.IsNullOrWhiteSpace(idItemName) && viewModel.TempDataItems.Contains(idItemName))
+            if (!string.IsNullOrWhiteSpace(idItemName) && viewModel.TempDataItems.Any(item => item.Name == idItemName))
             {
                 return true;
             }
@@ -524,14 +663,61 @@ namespace DrawingTool
                 {
                     definition.ParentDefinitionName = newName;
                 }
+
+                foreach (var item in definition.ItemDefinitions)
+                {
+                    if (item.ReferenceDefinitionName == oldName)
+                    {
+                        item.ReferenceDefinitionName = newName;
+                    }
+                }
             }
 
             foreach (var record in viewModel.DataRecords)
             {
                 if (record.DefinitionName == oldName)
                 {
-                    record.DefinitionName = newName;
+                record.DefinitionName = newName;
                 }
+            }
+        }
+
+        private void RenameDataRecordAttributeKeys(string definitionName, Dictionary<string, string> renameMap)
+        {
+            if (renameMap.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var record in viewModel.DataRecords.Where(record => record.DefinitionName == definitionName))
+            {
+                foreach (var pair in renameMap)
+                {
+                    RenameAttributeKey(record.Attributes, pair.Key, pair.Value);
+                }
+            }
+        }
+
+        private void RenameAttributeKey(List<SymbolAttribute> attributes, string oldKey, string newKey)
+        {
+            var oldAttributes = attributes
+                .Where(attribute => attribute.Key == oldKey)
+                .ToList();
+            if (oldAttributes.Count == 0)
+            {
+                return;
+            }
+
+            bool hasNewKey = attributes.Any(attribute => attribute.Key == newKey);
+            if (!hasNewKey)
+            {
+                oldAttributes[0].Key = newKey;
+                oldAttributes.RemoveAt(0);
+            }
+
+            foreach (var oldAttribute in oldAttributes)
+            {
+                attributes.Remove(oldAttribute);
             }
         }
 
@@ -539,6 +725,7 @@ namespace DrawingTool
         {
             lstDataDefinitions.Items.Refresh();
             cmbParentDataDefinition.Items.Refresh();
+            cmbDataItemReferenceDefinition.Items.Refresh();
             cmbPlacedSymbolDataDefinition.Items.Refresh();
             cmbLineGroupDataDefinition.Items.Refresh();
             cmbRecordDataDefinition.Items.Refresh();
@@ -576,6 +763,55 @@ namespace DrawingTool
             }
 
             CreateDataRecordFieldInputs(definition, ReadDataRecordFieldInputs());
+        }
+
+        private void BtnGenerateDataRecordId_Click(object sender, RoutedEventArgs e)
+        {
+            if (cmbRecordDataDefinition.SelectedItem is not DataDefinition definition)
+            {
+                MessageBox.Show(this, "データ定義を選択してください。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (!definition.UsePythonIdGenerator)
+            {
+                MessageBox.Show(this, "このデータ定義ではPython採番が有効になっていません。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(definition.PythonIdGeneratorCode))
+            {
+                MessageBox.Show(this, "データ定義にPythonコードを入力してください。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            EnsureDataRecordFieldInputs(definition);
+
+            try
+            {
+                string generatedId = GenerateDataRecordIdWithPython(definition, ReadDataRecordFieldInputs(), out string message);
+                if (string.IsNullOrWhiteSpace(generatedId))
+                {
+                    MessageBox.Show(this, "Pythonの戻り値からIDを取得できませんでした。文字列または {'id': '...'} を返してください。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                SetDataRecordFieldInput(definition.IdItemName, generatedId);
+                if (HasDuplicateDataRecordId(definition.Name, generatedId, lstDataRecords.SelectedItem as DataRecord))
+                {
+                    MessageBox.Show(this, $"ID「{generatedId}」は既に存在します。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                var resultMessage = string.IsNullOrWhiteSpace(message)
+                    ? $"ID「{generatedId}」を設定しました。"
+                    : $"ID「{generatedId}」を設定しました。\n{message}";
+                MessageBox.Show(this, resultMessage, "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Python採番に失敗しました。\n{ex.Message}", "追加データ", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         private void CmbRecordDataDefinition_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -709,7 +945,8 @@ namespace DrawingTool
 
         private void EnsureDataRecordFieldInputs(DataDefinition definition)
         {
-            if (pnlDataRecordFields.Children.OfType<TextBox>().Any())
+            if (pnlDataRecordFields.Children.OfType<Control>().Any(control =>
+                control is TextBox || control is ComboBox))
             {
                 return;
             }
@@ -724,53 +961,268 @@ namespace DrawingTool
                 .ToDictionary(group => group.Key, group => group.First().Value);
 
             pnlDataRecordFields.Children.Clear();
-            foreach (var itemName in GetDataDefinitionItemsIncludingParents(definition))
+            foreach (var item in GetDataDefinitionItemDefinitionsIncludingParents(definition))
             {
+                var itemName = item.Name;
                 var isIdItem = itemName == definition.IdItemName;
+                var referenceDefinitionName = item.ReferenceDefinitionName;
                 var label = new TextBlock
                 {
-                    Text = isIdItem ? $"{itemName} (ID)" : itemName,
+                    Text = CreateDataRecordFieldLabel(itemName, isIdItem, referenceDefinitionName),
                     Margin = new Thickness(0, 0, 0, 2),
                     FontWeight = isIdItem ? FontWeights.Bold : FontWeights.Normal
                 };
 
-                var input = new TextBox
+                pnlDataRecordFields.Children.Add(label);
+
+                if (!string.IsNullOrWhiteSpace(referenceDefinitionName))
+                {
+                    var input = new ComboBox
+                    {
+                        Tag = itemName,
+                        ItemsSource = viewModel.DataRecords
+                            .Where(record => record.DefinitionName == referenceDefinitionName)
+                            .ToList(),
+                        DisplayMemberPath = "DisplayText",
+                        SelectedValuePath = "Name",
+                        SelectedValue = valueByKey.TryGetValue(itemName, out var referenceValue) ? referenceValue : "",
+                        Margin = new Thickness(0, 0, 0, 6),
+                        Padding = new Thickness(2),
+                        BorderBrush = isIdItem ? Brushes.DarkBlue : SystemColors.ControlDarkBrush,
+                        BorderThickness = isIdItem ? new Thickness(2) : new Thickness(1)
+                    };
+                    pnlDataRecordFields.Children.Add(input);
+                    continue;
+                }
+
+                var textInput = new TextBox
                 {
                     Tag = itemName,
-                    Text = valueByKey.TryGetValue(itemName, out var value) ? value : "",
+                    Text = valueByKey.TryGetValue(itemName, out var textValue) ? textValue : "",
                     Margin = new Thickness(0, 0, 0, 6),
                     Padding = new Thickness(2),
                     BorderBrush = isIdItem ? Brushes.DarkBlue : SystemColors.ControlDarkBrush,
                     BorderThickness = isIdItem ? new Thickness(2) : new Thickness(1)
                 };
 
-                pnlDataRecordFields.Children.Add(label);
-                pnlDataRecordFields.Children.Add(input);
+                pnlDataRecordFields.Children.Add(textInput);
             }
         }
 
         private List<SymbolAttribute> ReadDataRecordFieldInputs()
         {
-            return pnlDataRecordFields.Children
+            var textAttributes = pnlDataRecordFields.Children
                 .OfType<TextBox>()
                 .Select(input => new SymbolAttribute
                 {
                     Key = input.Tag?.ToString() ?? "",
                     Value = input.Text
-                })
+                });
+            var comboAttributes = pnlDataRecordFields.Children
+                .OfType<ComboBox>()
+                .Select(input => new SymbolAttribute
+                {
+                    Key = input.Tag?.ToString() ?? "",
+                    Value = input.SelectedValue?.ToString() ?? ""
+                });
+
+            return textAttributes
+                .Concat(comboAttributes)
                 .Where(attribute => !string.IsNullOrWhiteSpace(attribute.Key))
                 .ToList();
         }
 
+        private void SetDataRecordFieldInput(string itemName, string value)
+        {
+            var textInput = pnlDataRecordFields.Children
+                .OfType<TextBox>()
+                .FirstOrDefault(textBox => (textBox.Tag?.ToString() ?? "") == itemName);
+            if (textInput != null)
+            {
+                textInput.Text = value;
+                return;
+            }
+
+            var comboInput = pnlDataRecordFields.Children
+                .OfType<ComboBox>()
+                .FirstOrDefault(comboBox => (comboBox.Tag?.ToString() ?? "") == itemName);
+            if (comboInput != null)
+            {
+                comboInput.SelectedValue = value;
+            }
+        }
+
+        private string GenerateDataRecordIdWithPython(
+            DataDefinition definition,
+            IEnumerable<SymbolAttribute> attributes,
+            out string message)
+        {
+            message = "";
+            var input = attributes
+                .GroupBy(attribute => attribute.Key)
+                .ToDictionary(group => group.Key, group => group.First().Value);
+            var saveData = CreateSaveData();
+            var payload = new
+            {
+                code = definition.PythonIdGeneratorCode,
+                input,
+                tables = CreateCsvTablePayload(saveData),
+                context = new
+                {
+                    definition = definition.Name,
+                    id_item = definition.IdItemName,
+                    data_record_table = $"data_records_{CreateSafeFileNamePart(definition.Name)}",
+                    placed_item_data_table = $"placed_item_data_{CreateSafeFileNamePart(definition.Name)}",
+                    line_group_data_table = $"line_group_data_{CreateSafeFileNamePart(definition.Name)}"
+                }
+            };
+
+            string output = RunPythonIdGeneratorProcess(JsonSerializer.Serialize(payload));
+            using var document = JsonDocument.Parse(output);
+            if (document.RootElement.ValueKind == JsonValueKind.String)
+            {
+                return document.RootElement.GetString()?.Trim() ?? "";
+            }
+
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return "";
+            }
+
+            if (document.RootElement.TryGetProperty("message", out var messageElement))
+            {
+                message = messageElement.GetString() ?? "";
+            }
+
+            if (document.RootElement.TryGetProperty("id", out var idElement))
+            {
+                return idElement.ValueKind == JsonValueKind.String
+                    ? idElement.GetString()?.Trim() ?? ""
+                    : idElement.ToString().Trim();
+            }
+
+            return "";
+        }
+
+        private string RunPythonIdGeneratorProcess(string payloadJson)
+        {
+            string wrapperPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"drawingtool-id-generator-{Guid.NewGuid():N}.py");
+            File.WriteAllText(wrapperPath, CreatePythonIdGeneratorWrapper(), new UTF8Encoding(false));
+
+            try
+            {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = "python",
+                    UseShellExecute = false,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                startInfo.ArgumentList.Add(wrapperPath);
+
+                using var process = Process.Start(startInfo)
+                    ?? throw new InvalidOperationException("Pythonプロセスを起動できませんでした。");
+
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
+                process.StandardInput.Write(payloadJson);
+                process.StandardInput.Close();
+
+                if (!process.WaitForExit(5000))
+                {
+                    process.Kill(true);
+                    throw new TimeoutException("Python採番が5秒以内に完了しませんでした。");
+                }
+
+                string output = outputTask.GetAwaiter().GetResult().Trim();
+                string error = errorTask.GetAwaiter().GetResult().Trim();
+                if (process.ExitCode != 0)
+                {
+                    throw new InvalidOperationException(string.IsNullOrWhiteSpace(error)
+                        ? "Pythonコードがエラー終了しました。"
+                        : error);
+                }
+
+                if (string.IsNullOrWhiteSpace(output))
+                {
+                    throw new InvalidOperationException("Pythonコードが結果を出力しませんでした。");
+                }
+
+                return output;
+            }
+            finally
+            {
+                try
+                {
+                    File.Delete(wrapperPath);
+                }
+                catch
+                {
+                    // Temporary file cleanup failure should not hide the original error.
+                }
+            }
+        }
+
+        private string CreatePythonIdGeneratorWrapper()
+        {
+            return """
+import json
+import sys
+import traceback
+
+try:
+    payload = json.loads(sys.stdin.read())
+    namespace = {}
+    exec(payload.get("code", ""), namespace, namespace)
+    generate_id = namespace.get("generate_id")
+    if generate_id is None:
+        raise RuntimeError("generate_id(input, tables, context) is not defined")
+
+    result = generate_id(
+        payload.get("input", {}),
+        payload.get("tables", {}),
+        payload.get("context", {})
+    )
+    if isinstance(result, dict):
+        output = result
+    else:
+        output = {"id": "" if result is None else str(result)}
+    print(json.dumps(output, ensure_ascii=False))
+except Exception:
+    traceback.print_exc(file=sys.stderr)
+    sys.exit(1)
+""";
+        }
+
         private List<string> GetDataDefinitionItemsIncludingParents(DataDefinition definition)
         {
-            var result = new List<string>();
+            return GetDataDefinitionItemDefinitionsIncludingParents(definition)
+                .Select(item => item.Name)
+                .ToList();
+        }
+
+        private string CreateDataRecordFieldLabel(string itemName, bool isIdItem, string referenceDefinitionName)
+        {
+            var label = isIdItem ? $"{itemName} (ID)" : itemName;
+            return string.IsNullOrWhiteSpace(referenceDefinitionName)
+                ? label
+                : $"{label} -> {referenceDefinitionName}.ID";
+        }
+
+        private List<DataDefinitionItem> GetDataDefinitionItemDefinitionsIncludingParents(DataDefinition definition)
+        {
+            var result = new List<DataDefinitionItem>();
             var visitedDefinitions = new HashSet<string>();
             AppendDataDefinitionItems(definition, result, visitedDefinitions);
             return result;
         }
 
-        private void AppendDataDefinitionItems(DataDefinition definition, List<string> result, HashSet<string> visitedDefinitions)
+        private void AppendDataDefinitionItems(
+            DataDefinition definition,
+            List<DataDefinitionItem> result,
+            HashSet<string> visitedDefinitions)
         {
             if (!visitedDefinitions.Add(definition.Name))
             {
@@ -786,11 +1238,11 @@ namespace DrawingTool
                 }
             }
 
-            foreach (var itemName in definition.Items)
+            foreach (var item in GetDataDefinitionOwnItems(definition))
             {
-                if (!result.Contains(itemName))
+                if (!result.Any(existingItem => existingItem.Name == item.Name))
                 {
-                    result.Add(itemName);
+                    result.Add(CloneDataDefinitionItem(item));
                 }
             }
         }
@@ -1729,6 +2181,33 @@ namespace DrawingTool
             return tables;
         }
 
+        private Dictionary<string, List<Dictionary<string, string>>> CreateCsvTablePayload(DrawingSaveData saveData)
+        {
+            var columnsByTable = CreateCsvTableColumns(saveData);
+            var rowsByTable = CreateCsvTableRows(saveData);
+            var result = new Dictionary<string, List<Dictionary<string, string>>>();
+
+            foreach (var tablePair in columnsByTable)
+            {
+                var tableRows = new List<Dictionary<string, string>>();
+                rowsByTable.TryGetValue(tablePair.Key, out var rows);
+                foreach (var row in rows ?? new List<List<string>>())
+                {
+                    var rowValues = new Dictionary<string, string>();
+                    for (int i = 0; i < tablePair.Value.Count; i++)
+                    {
+                        rowValues[tablePair.Value[i]] = i < row.Count ? row[i] : "";
+                    }
+
+                    tableRows.Add(rowValues);
+                }
+
+                result[tablePair.Key] = tableRows;
+            }
+
+            return result;
+        }
+
         private List<List<string>> GetCsvBody(IEnumerable<IEnumerable<string>> rows)
         {
             return rows.Skip(1)
@@ -1775,18 +2254,40 @@ namespace DrawingTool
 
         private IEnumerable<IEnumerable<string>> CreateDataDefinitionCsvRows(DrawingSaveData saveData)
         {
-            yield return new[] { "DefinitionName", "ParentDefinitionName", "IdItemName", "ItemOrder", "ItemName" };
+            yield return new[] { "DefinitionName", "ParentDefinitionName", "IdItemName", "UsePythonIdGenerator", "PythonIdGeneratorCode", "ItemOrder", "ItemName", "ReferenceDefinitionName" };
             foreach (var definition in saveData.DataDefinitions)
             {
-                if (definition.Items.Count == 0)
+                var itemDefinitions = GetSavedDataDefinitionOwnItems(definition);
+                if (itemDefinitions.Count == 0)
                 {
-                    yield return new[] { definition.Name, definition.ParentDefinitionName, definition.IdItemName, "", "" };
+                    yield return new[]
+                    {
+                        definition.Name,
+                        definition.ParentDefinitionName,
+                        definition.IdItemName,
+                        definition.UsePythonIdGenerator ? "true" : "false",
+                        definition.PythonIdGeneratorCode,
+                        "",
+                        "",
+                        ""
+                    };
                     continue;
                 }
 
-                for (int i = 0; i < definition.Items.Count; i++)
+                for (int i = 0; i < itemDefinitions.Count; i++)
                 {
-                    yield return new[] { definition.Name, definition.ParentDefinitionName, definition.IdItemName, (i + 1).ToString(CultureInfo.InvariantCulture), definition.Items[i] };
+                    var item = itemDefinitions[i];
+                    yield return new[]
+                    {
+                        definition.Name,
+                        definition.ParentDefinitionName,
+                        definition.IdItemName,
+                        definition.UsePythonIdGenerator ? "true" : "false",
+                        definition.PythonIdGeneratorCode,
+                        (i + 1).ToString(CultureInfo.InvariantCulture),
+                        item.Name,
+                        item.ReferenceDefinitionName
+                    };
                 }
             }
         }
@@ -2000,6 +2501,18 @@ namespace DrawingTool
             return result;
         }
 
+        private List<SavedDataDefinitionItem> GetSavedDataDefinitionOwnItems(SavedDataDefinition definition)
+        {
+            if (definition.ItemDefinitions.Count > 0)
+            {
+                return definition.ItemDefinitions;
+            }
+
+            return definition.Items
+                .Select(itemName => new SavedDataDefinitionItem { Name = itemName })
+                .ToList();
+        }
+
         private void AppendSavedDataDefinitionItems(
             DrawingSaveData saveData,
             SavedDataDefinition definition,
@@ -2020,8 +2533,9 @@ namespace DrawingTool
                 }
             }
 
-            foreach (var itemName in definition.Items)
+            foreach (var item in GetSavedDataDefinitionOwnItems(definition))
             {
+                var itemName = item.Name;
                 if (!result.Contains(itemName))
                 {
                     result.Add(itemName);
@@ -2227,11 +2741,28 @@ namespace DrawingTool
             {
                 Name = savedDefinition.Name,
                 ParentDefinitionName = savedDefinition.ParentDefinitionName,
-                IdItemName = savedDefinition.IdItemName
+                IdItemName = savedDefinition.IdItemName,
+                UsePythonIdGenerator = savedDefinition.UsePythonIdGenerator,
+                PythonIdGeneratorCode = savedDefinition.PythonIdGeneratorCode
             };
             foreach (var item in savedDefinition.Items)
             {
                 definition.Items.Add(item);
+            }
+            foreach (var item in savedDefinition.ItemDefinitions)
+            {
+                definition.ItemDefinitions.Add(new DataDefinitionItem
+                {
+                    Name = item.Name,
+                    ReferenceDefinitionName = item.ReferenceDefinitionName
+                });
+            }
+            if (definition.ItemDefinitions.Count == 0)
+            {
+                foreach (var itemName in definition.Items)
+                {
+                    definition.ItemDefinitions.Add(new DataDefinitionItem { Name = itemName });
+                }
             }
 
             return definition;
@@ -2577,7 +3108,16 @@ namespace DrawingTool
                     Name = definition.Name,
                     ParentDefinitionName = definition.ParentDefinitionName,
                     IdItemName = definition.IdItemName,
-                    Items = definition.Items.ToList()
+                    UsePythonIdGenerator = definition.UsePythonIdGenerator,
+                    PythonIdGeneratorCode = definition.PythonIdGeneratorCode,
+                    Items = definition.Items.ToList(),
+                    ItemDefinitions = GetDataDefinitionOwnItems(definition)
+                        .Select(item => new SavedDataDefinitionItem
+                        {
+                            Name = item.Name,
+                            ReferenceDefinitionName = item.ReferenceDefinitionName
+                        })
+                        .ToList()
                 });
             }
 

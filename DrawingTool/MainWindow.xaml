@@ -268,14 +268,28 @@
                         </StackPanel>
 
                         <TextBlock Text="項目名:" Margin="0,0,0,2"/>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                             <TextBox Name="txtDataItemName" Width="170" Padding="2"/>
                             <Button Content="項目追加" Click="BtnAddDataItem_Click" Padding="6,2" Margin="5,0,0,0"/>
+                        </StackPanel>
+                        <CheckBox Name="chkDataItemIsReference"
+                                  Content="この項目は他データのID"
+                                  Margin="0,0,0,4"/>
+                        <TextBlock Text="参照先データ定義:" Margin="0,0,0,2"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <ComboBox Name="cmbDataItemReferenceDefinition"
+                                      Width="170"
+                                      ItemsSource="{Binding DataDefinitions}"
+                                      DisplayMemberPath="DisplayText"
+                                      Padding="2"/>
+                            <Button Content="参照なし" Click="BtnClearDataItemReferenceDefinition_Click" Padding="6,2" Margin="5,0,0,0"/>
                         </StackPanel>
 
                         <ListBox Name="lstTempDataItems"
                                  Height="100"
                                  ItemsSource="{Binding TempDataItems}"
+                                 DisplayMemberPath="DisplayText"
+                                 SelectionChanged="LstTempDataItems_SelectionChanged"
                                  Margin="0,0,0,8"/>
 
                         <TextBlock Text="ID項目:" Margin="0,0,0,2"/>
@@ -283,11 +297,30 @@
                             <ComboBox Name="cmbDataDefinitionIdItem"
                                       Width="170"
                                       ItemsSource="{Binding TempDataItems}"
+                                      DisplayMemberPath="Name"
+                                      SelectedValuePath="Name"
                                       Padding="2"/>
                         </StackPanel>
 
+                        <CheckBox Name="chkUsePythonIdGenerator"
+                                  Content="IDをPythonで自動採番する"
+                                  Margin="0,0,0,6"/>
+                        <TextBlock Text="Pythonコード: generate_id(input, tables, context) を定義してください。戻り値は文字列または {'id': '...'} です。"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,2"/>
+                        <TextBox Name="txtPythonIdGeneratorCode"
+                                 Height="120"
+                                 AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 TextWrapping="NoWrap"
+                                 FontFamily="Consolas"
+                                 Margin="0,0,0,8"
+                                 Padding="2"/>
+
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
                             <Button Content="選択項目を削除" Click="BtnRemoveDataItem_Click" Padding="6,2"/>
+                            <Button Content="選択項目を変更" Click="BtnUpdateDataItem_Click" Padding="6,2" Margin="5,0,0,0"/>
                             <Button Content="項目クリア" Click="BtnClearDataItems_Click" Padding="6,2" Margin="5,0,0,0"/>
                         </StackPanel>
 
@@ -317,7 +350,10 @@
                                   SelectionChanged="CmbRecordDataDefinition_SelectionChanged"
                                   Margin="0,0,0,5"
                                   Padding="2"/>
-                        <Button Content="定義項目から値欄を作成" Click="BtnCreateRecordFields_Click" Padding="6,2" Margin="0,0,0,5"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
+                            <Button Content="定義項目から値欄を作成" Click="BtnCreateRecordFields_Click" Padding="6,2"/>
+                            <Button Content="PythonでID採番" Click="BtnGenerateDataRecordId_Click" Padding="6,2" Margin="5,0,0,0"/>
+                        </StackPanel>
                         <ScrollViewer Height="140"
                                       VerticalScrollBarVisibility="Auto"
                                       Margin="0,0,0,5">

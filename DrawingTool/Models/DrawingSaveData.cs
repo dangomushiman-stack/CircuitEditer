@@ -18,7 +18,16 @@ namespace DrawingTool.Models
         public string Name { get; set; } = "";
         public string ParentDefinitionName { get; set; } = "";
         public string IdItemName { get; set; } = "";
+        public bool UsePythonIdGenerator { get; set; }
+        public string PythonIdGeneratorCode { get; set; } = "";
         public List<string> Items { get; set; } = new List<string>();
+        public List<SavedDataDefinitionItem> ItemDefinitions { get; set; } = new List<SavedDataDefinitionItem>();
+    }
+
+    public class SavedDataDefinitionItem
+    {
+        public string Name { get; set; } = "";
+        public string ReferenceDefinitionName { get; set; } = "";
     }
 
     public class SavedDataRecord
