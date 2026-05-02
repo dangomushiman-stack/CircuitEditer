@@ -26,6 +26,7 @@ namespace DrawingTool
         private Dictionary<Line, LineConnectionInfo> lineConnections = new Dictionary<Line, LineConnectionInfo>();
         private Dictionary<Line, ConnectionNode> lineStartNodes = new Dictionary<Line, ConnectionNode>();
         private Dictionary<Line, ConnectionNode> lineEndNodes = new Dictionary<Line, ConnectionNode>();
+        private Dictionary<UIElement, List<SymbolAttribute>> drawingElementAttributes = new Dictionary<UIElement, List<SymbolAttribute>>();
         private LineConnectionInfo wireCSplitTargets = null;
 
         private bool isDrawingOrMoving = false;
@@ -146,6 +147,7 @@ namespace DrawingTool
                     symbolCanvas.Tag is ShapeDefinition def &&
                     def.Type == "Symbol")
                 {
+                    int attributeCount = GetDrawingElementAttributes(symbolCanvas).Count;
                     placedDrawings.Add(new PlacedDrawingInfo
                     {
                         No = no++,
@@ -157,13 +159,16 @@ namespace DrawingTool
                         Height = def.FixedHeight,
                         GridWidthCount = def.GridWidthCount,
                         GridHeightCount = def.GridHeightCount,
-                        ConnectionPointCount = def.ConnectionPoints.Count
+                        ConnectionPointCount = def.ConnectionPoints.Count,
+                        AttributeCount = attributeCount,
+                        Element = symbolCanvas
                     });
                 }
                 else if (element is Line line &&
                          line.Tag is ShapeDefinition lineDef &&
                          lineDef.Type == "Line")
                 {
+                    int attributeCount = GetDrawingElementAttributes(line).Count;
                     placedDrawings.Add(new PlacedDrawingInfo
                     {
                         No = no++,
@@ -172,13 +177,16 @@ namespace DrawingTool
                         X = line.X1,
                         Y = line.Y1,
                         X2 = line.X2,
-                        Y2 = line.Y2
+                        Y2 = line.Y2,
+                        AttributeCount = attributeCount,
+                        Element = line
                     });
                 }
                 else if (element is Rectangle rectangle &&
                          rectangle.Tag is ShapeDefinition rectDef &&
                          rectDef.Type == "Rectangle")
                 {
+                    int attributeCount = GetDrawingElementAttributes(rectangle).Count;
                     placedDrawings.Add(new PlacedDrawingInfo
                     {
                         No = no++,
@@ -187,7 +195,9 @@ namespace DrawingTool
                         X = Canvas.GetLeft(rectangle),
                         Y = Canvas.GetTop(rectangle),
                         Width = rectangle.Width,
-                        Height = rectangle.Height
+                        Height = rectangle.Height,
+                        AttributeCount = attributeCount,
+                        Element = rectangle
                     });
                 }
             }
@@ -261,6 +271,518 @@ namespace DrawingTool
         {
             viewModel.ClearTempVectorElements();
             RefreshEditor();
+        }
+
+        private void BtnAddDataItem_Click(object sender, RoutedEventArgs e)
+        {
+            string itemName = txtDataItemName.Text.Trim();
+            if (itemName.Length == 0 || viewModel.TempDataItems.Contains(itemName))
+            {
+                return;
+            }
+
+            viewModel.TempDataItems.Add(itemName);
+            txtDataItemName.Clear();
+        }
+
+        private void BtnRemoveDataItem_Click(object sender, RoutedEventArgs e)
+        {
+            if (lstTempDataItems.SelectedItem is string itemName)
+            {
+                viewModel.TempDataItems.Remove(itemName);
+                if (cmbDataDefinitionIdItem.SelectedItem as string == itemName)
+                {
+                    cmbDataDefinitionIdItem.SelectedItem = null;
+                }
+            }
+        }
+
+        private void BtnClearDataItems_Click(object sender, RoutedEventArgs e)
+        {
+            viewModel.TempDataItems.Clear();
+            cmbDataDefinitionIdItem.SelectedItem = null;
+        }
+
+        private void BtnClearParentDataDefinition_Click(object sender, RoutedEventArgs e)
+        {
+            cmbParentDataDefinition.SelectedItem = null;
+        }
+
+        private void BtnRegisterDataDefinition_Click(object sender, RoutedEventArgs e)
+        {
+            string name = txtDataDefinitionName.Text.Trim();
+            if (name.Length == 0)
+            {
+                MessageBox.Show(this, "データ定義名を入力してください。", "データ定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            string parentDefinitionName = GetSelectedParentDataDefinitionName();
+            string idItemName = GetSelectedDataDefinitionIdItemName();
+            if (!ValidateDataDefinitionRelationship(name, parentDefinitionName, null))
+            {
+                return;
+            }
+            if (!ValidateDataDefinitionIdItem(idItemName))
+            {
+                return;
+            }
+
+            viewModel.RegisterDataDefinition(name, parentDefinitionName, idItemName);
+            RefreshDataDefinitionViews();
+        }
+
+        private void BtnLoadDataDefinition_Click(object sender, RoutedEventArgs e)
+        {
+            if (lstDataDefinitions.SelectedItem is not DataDefinition definition)
+            {
+                MessageBox.Show(this, "読み込むデータ定義を選択してください。", "データ定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            LoadDataDefinitionToEditor(definition);
+        }
+
+        private void BtnUpdateDataDefinition_Click(object sender, RoutedEventArgs e)
+        {
+            if (lstDataDefinitions.SelectedItem is not DataDefinition definition)
+            {
+                MessageBox.Show(this, "更新するデータ定義を選択してください。", "データ定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            string name = txtDataDefinitionName.Text.Trim();
+            if (name.Length == 0)
+            {
+                MessageBox.Show(this, "データ定義名を入力してください。", "データ定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            string parentDefinitionName = GetSelectedParentDataDefinitionName();
+            string idItemName = GetSelectedDataDefinitionIdItemName();
+            if (!ValidateDataDefinitionRelationship(name, parentDefinitionName, definition))
+            {
+                return;
+            }
+            if (!ValidateDataDefinitionIdItem(idItemName))
+            {
+                return;
+            }
+
+            string oldName = definition.Name;
+            definition.Name = name;
+            definition.ParentDefinitionName = parentDefinitionName;
+            definition.IdItemName = idItemName;
+            definition.Items.Clear();
+            foreach (var item in viewModel.TempDataItems)
+            {
+                definition.Items.Add(item);
+            }
+
+            UpdateDataDefinitionReferences(oldName, name);
+            SyncDataRecordIdsForDefinition(definition);
+            RefreshDataDefinitionViews();
+        }
+
+        private void LoadDataDefinitionToEditor(DataDefinition definition)
+        {
+            txtDataDefinitionName.Text = definition.Name;
+            cmbParentDataDefinition.SelectedItem = viewModel.DataDefinitions
+                .FirstOrDefault(item => item.Name == definition.ParentDefinitionName);
+            viewModel.TempDataItems.Clear();
+            foreach (var item in definition.Items)
+            {
+                viewModel.TempDataItems.Add(item);
+            }
+            cmbDataDefinitionIdItem.SelectedItem = viewModel.TempDataItems
+                .FirstOrDefault(item => item == definition.IdItemName);
+        }
+
+        private string GetSelectedParentDataDefinitionName()
+        {
+            return cmbParentDataDefinition.SelectedItem is DataDefinition parentDefinition
+                ? parentDefinition.Name
+                : "";
+        }
+
+        private string GetSelectedDataDefinitionIdItemName()
+        {
+            return cmbDataDefinitionIdItem.SelectedItem is string itemName ? itemName : "";
+        }
+
+        private bool ValidateDataDefinitionIdItem(string idItemName)
+        {
+            if (!string.IsNullOrWhiteSpace(idItemName) && viewModel.TempDataItems.Contains(idItemName))
+            {
+                return true;
+            }
+
+            MessageBox.Show(this, "ID項目は必須です。このデータ定義の項目から1つ選択してください。", "データ定義", MessageBoxButton.OK, MessageBoxImage.Information);
+            return false;
+        }
+
+        private bool ValidateDataDefinitionRelationship(
+            string name,
+            string parentDefinitionName,
+            DataDefinition? editingDefinition)
+        {
+            if (viewModel.DataDefinitions.Any(definition => definition != editingDefinition && definition.Name == name))
+            {
+                MessageBox.Show(this, "同じ名前のデータ定義が既にあります。親子関係を扱うため、データ定義名は一意にしてください。", "データ定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(parentDefinitionName))
+            {
+                return true;
+            }
+
+            if (parentDefinitionName == name)
+            {
+                MessageBox.Show(this, "自分自身を親データ定義にはできません。", "データ定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return false;
+            }
+
+            var visitedNames = new HashSet<string>();
+            string currentParentName = parentDefinitionName;
+            while (!string.IsNullOrWhiteSpace(currentParentName))
+            {
+                if (!visitedNames.Add(currentParentName) ||
+                    currentParentName == name ||
+                    (editingDefinition != null && currentParentName == editingDefinition.Name))
+                {
+                    MessageBox.Show(this, "循環する親子関係は定義できません。", "データ定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return false;
+                }
+
+                var parent = viewModel.DataDefinitions.FirstOrDefault(definition => definition.Name == currentParentName);
+                if (parent == null)
+                {
+                    break;
+                }
+
+                currentParentName = parent.ParentDefinitionName;
+            }
+
+            return true;
+        }
+
+        private void UpdateDataDefinitionReferences(string oldName, string newName)
+        {
+            if (oldName == newName)
+            {
+                return;
+            }
+
+            foreach (var definition in viewModel.DataDefinitions)
+            {
+                if (definition.ParentDefinitionName == oldName)
+                {
+                    definition.ParentDefinitionName = newName;
+                }
+            }
+
+            foreach (var record in viewModel.DataRecords)
+            {
+                if (record.DefinitionName == oldName)
+                {
+                    record.DefinitionName = newName;
+                }
+            }
+        }
+
+        private void RefreshDataDefinitionViews()
+        {
+            lstDataDefinitions.Items.Refresh();
+            cmbParentDataDefinition.Items.Refresh();
+            cmbPlacedSymbolDataDefinition.Items.Refresh();
+            cmbRecordDataDefinition.Items.Refresh();
+            RefreshPlacedDataRecordChoices();
+            lstDataRecords.Items.Refresh();
+        }
+
+        private void SyncDataRecordIdsForDefinition(DataDefinition definition)
+        {
+            if (string.IsNullOrWhiteSpace(definition.IdItemName))
+            {
+                return;
+            }
+
+            foreach (var record in viewModel.DataRecords.Where(record => record.DefinitionName == definition.Name))
+            {
+                var idValue = record.Attributes
+                    .FirstOrDefault(attribute => attribute.Key == definition.IdItemName)
+                    ?.Value
+                    .Trim();
+                if (!string.IsNullOrWhiteSpace(idValue))
+                {
+                    record.Name = idValue;
+                }
+            }
+        }
+
+        private void BtnCreateRecordFields_Click(object sender, RoutedEventArgs e)
+        {
+            if (cmbRecordDataDefinition.SelectedItem is not DataDefinition definition)
+            {
+                MessageBox.Show(this, "データ定義を選択してください。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            CreateDataRecordFieldInputs(definition, ReadDataRecordFieldInputs());
+        }
+
+        private void CmbRecordDataDefinition_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (cmbRecordDataDefinition.SelectedItem is DataDefinition definition)
+            {
+                CreateDataRecordFieldInputs(definition, ReadDataRecordFieldInputs());
+            }
+            else
+            {
+                pnlDataRecordFields.Children.Clear();
+            }
+        }
+
+        private void BtnRegisterDataRecord_Click(object sender, RoutedEventArgs e)
+        {
+            if (cmbRecordDataDefinition.SelectedItem is not DataDefinition definition)
+            {
+                MessageBox.Show(this, "データ定義を選択してください。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            EnsureDataRecordFieldInputs(definition);
+            var attributes = ReadDataRecordFieldInputs();
+            if (!TryGetDataRecordId(definition, attributes, out string idValue))
+            {
+                return;
+            }
+
+            if (HasDuplicateDataRecordId(definition.Name, idValue, null))
+            {
+                MessageBox.Show(this, "同じデータ定義内に同じIDの追加データが既にあります。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            viewModel.RegisterDataRecord(idValue, definition, attributes);
+            lstDataRecords.Items.Refresh();
+            RefreshPlacedDataRecordChoices();
+        }
+
+        private void BtnLoadDataRecord_Click(object sender, RoutedEventArgs e)
+        {
+            if (lstDataRecords.SelectedItem is not DataRecord record)
+            {
+                MessageBox.Show(this, "読み込む追加データを選択してください。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            LoadDataRecordToEditor(record);
+        }
+
+        private void BtnUpdateDataRecord_Click(object sender, RoutedEventArgs e)
+        {
+            if (lstDataRecords.SelectedItem is not DataRecord record)
+            {
+                MessageBox.Show(this, "更新する追加データを選択してください。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (cmbRecordDataDefinition.SelectedItem is not DataDefinition definition)
+            {
+                MessageBox.Show(this, "データ定義を選択してください。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            EnsureDataRecordFieldInputs(definition);
+            var attributes = ReadDataRecordFieldInputs();
+            if (!TryGetDataRecordId(definition, attributes, out string idValue))
+            {
+                return;
+            }
+
+            if (HasDuplicateDataRecordId(definition.Name, idValue, record))
+            {
+                MessageBox.Show(this, "同じデータ定義内に同じIDの追加データが既にあります。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            record.Name = idValue;
+            record.DefinitionName = definition.Name;
+            record.Attributes = attributes;
+            lstDataRecords.Items.Refresh();
+            RefreshPlacedDataRecordChoices();
+        }
+
+        private void LoadDataRecordToEditor(DataRecord record)
+        {
+            var definition = viewModel.DataDefinitions.FirstOrDefault(item => item.Name == record.DefinitionName);
+            if (definition != null)
+            {
+                cmbRecordDataDefinition.SelectedItem = definition;
+                CreateDataRecordFieldInputs(definition, record.Attributes);
+            }
+            else
+            {
+                pnlDataRecordFields.Children.Clear();
+            }
+        }
+
+        private bool TryGetDataRecordId(DataDefinition definition, IEnumerable<SymbolAttribute> attributes, out string idValue)
+        {
+            idValue = "";
+            if (string.IsNullOrWhiteSpace(definition.IdItemName))
+            {
+                MessageBox.Show(this, "このデータ定義にはID項目が設定されていません。データ定義タブでID項目を設定してください。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return false;
+            }
+
+            idValue = attributes
+                .FirstOrDefault(attribute => attribute.Key == definition.IdItemName)
+                ?.Value
+                .Trim() ?? "";
+            if (idValue.Length == 0)
+            {
+                MessageBox.Show(this, $"ID項目「{definition.IdItemName}」の値を入力してください。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool HasDuplicateDataRecordId(string definitionName, string idValue, DataRecord? editingRecord)
+        {
+            return viewModel.DataRecords.Any(record =>
+                record != editingRecord &&
+                record.DefinitionName == definitionName &&
+                record.Name == idValue);
+        }
+
+        private void EnsureDataRecordFieldInputs(DataDefinition definition)
+        {
+            if (pnlDataRecordFields.Children.OfType<TextBox>().Any())
+            {
+                return;
+            }
+
+            CreateDataRecordFieldInputs(definition, Enumerable.Empty<SymbolAttribute>());
+        }
+
+        private void CreateDataRecordFieldInputs(DataDefinition definition, IEnumerable<SymbolAttribute> currentValues)
+        {
+            var valueByKey = currentValues
+                .GroupBy(attribute => attribute.Key)
+                .ToDictionary(group => group.Key, group => group.First().Value);
+
+            pnlDataRecordFields.Children.Clear();
+            foreach (var itemName in GetDataDefinitionItemsIncludingParents(definition))
+            {
+                var isIdItem = itemName == definition.IdItemName;
+                var label = new TextBlock
+                {
+                    Text = isIdItem ? $"{itemName} (ID)" : itemName,
+                    Margin = new Thickness(0, 0, 0, 2),
+                    FontWeight = isIdItem ? FontWeights.Bold : FontWeights.Normal
+                };
+
+                var input = new TextBox
+                {
+                    Tag = itemName,
+                    Text = valueByKey.TryGetValue(itemName, out var value) ? value : "",
+                    Margin = new Thickness(0, 0, 0, 6),
+                    Padding = new Thickness(2),
+                    BorderBrush = isIdItem ? Brushes.DarkBlue : SystemColors.ControlDarkBrush,
+                    BorderThickness = isIdItem ? new Thickness(2) : new Thickness(1)
+                };
+
+                pnlDataRecordFields.Children.Add(label);
+                pnlDataRecordFields.Children.Add(input);
+            }
+        }
+
+        private List<SymbolAttribute> ReadDataRecordFieldInputs()
+        {
+            return pnlDataRecordFields.Children
+                .OfType<TextBox>()
+                .Select(input => new SymbolAttribute
+                {
+                    Key = input.Tag?.ToString() ?? "",
+                    Value = input.Text
+                })
+                .Where(attribute => !string.IsNullOrWhiteSpace(attribute.Key))
+                .ToList();
+        }
+
+        private List<string> GetDataDefinitionItemsIncludingParents(DataDefinition definition)
+        {
+            var result = new List<string>();
+            var visitedDefinitions = new HashSet<string>();
+            AppendDataDefinitionItems(definition, result, visitedDefinitions);
+            return result;
+        }
+
+        private void AppendDataDefinitionItems(DataDefinition definition, List<string> result, HashSet<string> visitedDefinitions)
+        {
+            if (!visitedDefinitions.Add(definition.Name))
+            {
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(definition.ParentDefinitionName))
+            {
+                var parent = viewModel.DataDefinitions.FirstOrDefault(item => item.Name == definition.ParentDefinitionName);
+                if (parent != null)
+                {
+                    AppendDataDefinitionItems(parent, result, visitedDefinitions);
+                }
+            }
+
+            foreach (var itemName in definition.Items)
+            {
+                if (!result.Contains(itemName))
+                {
+                    result.Add(itemName);
+                }
+            }
+        }
+
+        private List<SymbolAttribute> ParseAttributesText(string text)
+        {
+            return text
+                .Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
+                .Select(line => line.Trim())
+                .Where(line => line.Length > 0)
+                .Select(line =>
+                {
+                    int separatorIndex = line.IndexOf('=');
+                    if (separatorIndex < 0)
+                    {
+                        return new SymbolAttribute { Key = line, Value = "" };
+                    }
+
+                    return new SymbolAttribute
+                    {
+                        Key = line.Substring(0, separatorIndex).Trim(),
+                        Value = line.Substring(separatorIndex + 1).Trim()
+                    };
+                })
+                .Where(attribute => attribute.Key.Length > 0)
+                .ToList();
+        }
+
+        private string FormatAttributesText(IEnumerable<SymbolAttribute> attributes)
+        {
+            return string.Join(Environment.NewLine, attributes.Select(attribute => $"{attribute.Key}={attribute.Value}"));
+        }
+
+        private SymbolAttribute CloneAttribute(SymbolAttribute attribute)
+        {
+            return new SymbolAttribute
+            {
+                Key = attribute.Key,
+                Value = attribute.Value
+            };
         }
 
         private Point GetEditorGridPoint(Point editorPoint)
@@ -398,6 +920,8 @@ namespace DrawingTool
             else if (rbLineWireC.IsChecked == true) role = LineRoleType.WireC;
             else if (rbLineBus.IsChecked == true) role = LineRoleType.Bus;
 
+            viewModel.TempAttributes.Clear();
+
             var def = viewModel.RegisterShape(
                 txtShapeId.Text,
                 ((ComboBoxItem)cmbShapeType.SelectedItem).Tag.ToString(),
@@ -428,6 +952,45 @@ namespace DrawingTool
             }
         }
 
+        private void LstPlacedSymbols_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (lstPlacedSymbols.SelectedItem is not PlacedDrawingInfo placed || placed.Element == null)
+            {
+                return;
+            }
+
+            currentElement = placed.Element;
+            rbSelect.IsChecked = true;
+            HideAllHandles();
+            ShowSelectionHighlight(currentElement);
+            if (currentElement is Shape shape && shape.Tag is ShapeDefinition shapeDefinition)
+            {
+                ShowResizeHandles(shape, shapeDefinition);
+            }
+
+            if (currentElement != null && IsSavedDrawingElement(currentElement))
+            {
+                LoadPlacedElementDataAssignment(currentElement);
+            }
+        }
+
+        private UIElement? GetSelectedPlacedElement()
+        {
+            if (lstPlacedSymbols.SelectedItem is PlacedDrawingInfo placed &&
+                placed.Element != null &&
+                IsSavedDrawingElement(placed.Element))
+            {
+                return placed.Element;
+            }
+
+            if (currentElement != null && IsSavedDrawingElement(currentElement))
+            {
+                return currentElement;
+            }
+
+            return null;
+        }
+
         private void BtnLoadSelectedSymbol_Click(object sender, RoutedEventArgs e)
         {
             if (lstRegisteredSymbols.SelectedItem is not ShapeDefinition definition)
@@ -454,6 +1017,117 @@ namespace DrawingTool
             RefreshPlacedSymbols();
         }
 
+        private void CmbPlacedSymbolDataDefinition_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            RefreshPlacedDataRecordChoices();
+        }
+
+        private void RefreshPlacedDataRecordChoices()
+        {
+            var selectedRecord = cmbPlacedDataRecord.SelectedItem as DataRecord;
+            if (cmbPlacedSymbolDataDefinition.SelectedItem is not DataDefinition definition)
+            {
+                cmbPlacedDataRecord.ItemsSource = null;
+                return;
+            }
+
+            var records = viewModel.DataRecords
+                .Where(record => record.DefinitionName == definition.Name)
+                .ToList();
+            cmbPlacedDataRecord.ItemsSource = records;
+
+            if (selectedRecord != null && records.Contains(selectedRecord))
+            {
+                cmbPlacedDataRecord.SelectedItem = selectedRecord;
+            }
+            else
+            {
+                cmbPlacedDataRecord.SelectedItem = null;
+            }
+        }
+
+        private void BtnAssignDataRecordToPlaced_Click(object sender, RoutedEventArgs e)
+        {
+            if (GetSelectedPlacedElement() is not UIElement element)
+            {
+                MessageBox.Show(this, "配置済み図形一覧から図形を選択してください。", "対応情報", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (cmbPlacedSymbolDataDefinition.SelectedItem is not DataDefinition definition)
+            {
+                MessageBox.Show(this, "データ定義を選択してください。", "対応情報", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (cmbPlacedDataRecord.SelectedItem is not DataRecord record)
+            {
+                MessageBox.Show(this, "追加データを選択してください。", "対応情報", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (record.DefinitionName != definition.Name)
+            {
+                MessageBox.Show(this, "選択したデータ定義と追加データの種別が一致していません。", "対応情報", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            drawingElementAttributes[element] = record.Attributes.Select(CloneAttribute).ToList();
+            txtPlacedSymbolAttributes.Text = FormatAttributesText(drawingElementAttributes[element]);
+            RefreshPlacedSymbols();
+        }
+
+        private void LoadPlacedElementDataAssignment(UIElement element)
+        {
+            var attributes = GetDrawingElementAttributes(element);
+            txtPlacedSymbolAttributes.Text = FormatAttributesText(attributes);
+
+            var record = FindDataRecordByAttributes(attributes);
+            if (record == null)
+            {
+                cmbPlacedSymbolDataDefinition.SelectedItem = null;
+                cmbPlacedDataRecord.ItemsSource = null;
+                cmbPlacedDataRecord.SelectedItem = null;
+                return;
+            }
+
+            var definition = viewModel.DataDefinitions.FirstOrDefault(item => item.Name == record.DefinitionName);
+            cmbPlacedSymbolDataDefinition.SelectedItem = definition;
+            RefreshPlacedDataRecordChoices();
+            cmbPlacedDataRecord.SelectedItem = record;
+        }
+
+        private DataRecord? FindDataRecordByAttributes(IEnumerable<SymbolAttribute> attributes)
+        {
+            var attributeList = attributes.ToList();
+            foreach (var definition in viewModel.DataDefinitions)
+            {
+                if (string.IsNullOrWhiteSpace(definition.IdItemName))
+                {
+                    continue;
+                }
+
+                var idValue = attributeList
+                    .FirstOrDefault(attribute => attribute.Key == definition.IdItemName)
+                    ?.Value
+                    .Trim();
+                if (string.IsNullOrWhiteSpace(idValue))
+                {
+                    continue;
+                }
+
+                var record = viewModel.DataRecords.FirstOrDefault(item =>
+                    item.DefinitionName == definition.Name &&
+                    item.Name == idValue);
+                if (record != null)
+                {
+                    return record;
+                }
+            }
+
+            return null;
+        }
+
         private void LoadSymbolDefinitionToEditor(ShapeDefinition definition)
         {
             isLoadingSymbolDefinition = true;
@@ -468,6 +1142,7 @@ namespace DrawingTool
                 viewModel.TempConnectionPoints.AddRange(definition.ConnectionPoints);
                 viewModel.TempVectorElements.Clear();
                 viewModel.TempVectorElements.AddRange(definition.VectorElements.Select(CloneVectorElement));
+                viewModel.TempAttributes.Clear();
                 rbEditorPorts.IsChecked = true;
             }
             finally
@@ -504,6 +1179,21 @@ namespace DrawingTool
             };
         }
 
+        private List<SymbolAttribute> GetDrawingElementAttributes(UIElement element)
+        {
+            if (drawingElementAttributes.TryGetValue(element, out var attributes))
+            {
+                return attributes.Select(CloneAttribute).ToList();
+            }
+
+            if (element is Canvas && element is FrameworkElement frameworkElement && frameworkElement.Tag is ShapeDefinition definition)
+            {
+                return definition.Attributes.Select(CloneAttribute).ToList();
+            }
+
+            return new List<SymbolAttribute>();
+        }
+
         private void BtnDeleteSelected_Click(object sender, RoutedEventArgs e)
         {
             DeleteSelectedElement();
@@ -536,6 +1226,7 @@ namespace DrawingTool
             isResizing = false;
             activeHandle = null;
             wireCSplitTargets = null;
+            drawingElementAttributes.Remove(deletedElement);
             HideAllHandles();
             HideSelectionHighlight();
             RefreshPlacedSymbols();
@@ -634,6 +1325,7 @@ namespace DrawingTool
             lineConnections.Clear();
             lineStartNodes.Clear();
             lineEndNodes.Clear();
+            drawingElementAttributes.Clear();
 
             foreach (var element in DrawCanvas.Children.OfType<UIElement>().Where(IsSavedDrawingElement).ToList())
             {
@@ -644,6 +1336,8 @@ namespace DrawingTool
                 .Select(CreateShapeDefinition)
                 .ToList();
             viewModel.ReplaceShapeDefinitions(definitions);
+            viewModel.ReplaceDataDefinitions(saveData.DataDefinitions.Select(CreateDataDefinition));
+            viewModel.ReplaceDataRecords(saveData.DataRecords.Select(CreateDataRecord));
 
             var definitionById = definitions
                 .Where(definition => !string.IsNullOrWhiteSpace(definition.Id))
@@ -694,7 +1388,54 @@ namespace DrawingTool
                     .ToList(),
                 VectorElements = savedDefinition.VectorElements
                     .Select(CreateVectorElement)
+                    .ToList(),
+                Attributes = savedDefinition.Attributes
+                    .Select(CreateAttribute)
                     .ToList()
+            };
+        }
+
+        private DataDefinition CreateDataDefinition(SavedDataDefinition savedDefinition)
+        {
+            var definition = new DataDefinition
+            {
+                Name = savedDefinition.Name,
+                ParentDefinitionName = savedDefinition.ParentDefinitionName,
+                IdItemName = savedDefinition.IdItemName
+            };
+            foreach (var item in savedDefinition.Items)
+            {
+                definition.Items.Add(item);
+            }
+
+            return definition;
+        }
+
+        private DataRecord CreateDataRecord(SavedDataRecord savedRecord)
+        {
+            return new DataRecord
+            {
+                Name = savedRecord.Name,
+                DefinitionName = savedRecord.DefinitionName,
+                Attributes = savedRecord.Attributes.Select(CreateAttribute).ToList()
+            };
+        }
+
+        private SymbolAttribute CreateAttribute(SavedSymbolAttribute attribute)
+        {
+            return new SymbolAttribute
+            {
+                Key = attribute.Key,
+                Value = attribute.Value
+            };
+        }
+
+        private SavedSymbolAttribute CreateSavedAttribute(SymbolAttribute attribute)
+        {
+            return new SavedSymbolAttribute
+            {
+                Key = attribute.Key,
+                Value = attribute.Value
             };
         }
 
@@ -742,7 +1483,9 @@ namespace DrawingTool
         {
             if (item.Type == "Line")
             {
-                return CreateLineElement(definition, new Point(item.X, item.Y), new Point(item.X2, item.Y2));
+                var line = CreateLineElement(definition, new Point(item.X, item.Y), new Point(item.X2, item.Y2));
+                drawingElementAttributes[line] = item.Attributes.Select(CreateAttribute).ToList();
+                return line;
             }
 
             if (item.Type == "Symbol")
@@ -752,10 +1495,16 @@ namespace DrawingTool
                     definition.VectorElements = item.VectorElements.Select(CreateVectorElement).ToList();
                 }
 
-                return CreateSymbolElement(definition, item.X, item.Y, item.Width, item.Height);
+                var symbol = CreateSymbolElement(definition, item.X, item.Y, item.Width, item.Height);
+                drawingElementAttributes[symbol] = item.Attributes.Count > 0
+                    ? item.Attributes.Select(CreateAttribute).ToList()
+                    : definition.Attributes.Select(CloneAttribute).ToList();
+                return symbol;
             }
 
-            return CreateRectangleElement(definition, item.X, item.Y, item.Width, item.Height);
+            var rectangle = CreateRectangleElement(definition, item.X, item.Y, item.Width, item.Height);
+            drawingElementAttributes[rectangle] = item.Attributes.Select(CreateAttribute).ToList();
+            return rectangle;
         }
 
         private Rectangle CreateRectangleElement(ShapeDefinition definition, double x, double y, double width, double height)
@@ -780,6 +1529,7 @@ namespace DrawingTool
             double symbolHeight = height > 0 ? height : (definition.FixedHeight > 0 ? definition.FixedHeight : definition.FixedSize);
             var symbol = new Canvas { Width = symbolWidth, Height = symbolHeight, Tag = definition };
             PopulateSymbolCanvas(symbol, definition, symbolWidth, symbolHeight);
+            drawingElementAttributes[symbol] = definition.Attributes.Select(CloneAttribute).ToList();
 
             Canvas.SetLeft(symbol, x);
             Canvas.SetTop(symbol, y);
@@ -933,7 +1683,31 @@ namespace DrawingTool
                         .ToList(),
                     VectorElements = definition.VectorElements
                         .Select(CreateSavedVectorElement)
+                        .ToList(),
+                    Attributes = definition.Attributes
+                        .Select(CreateSavedAttribute)
                         .ToList()
+                });
+            }
+
+            foreach (var definition in viewModel.DataDefinitions)
+            {
+                saveData.DataDefinitions.Add(new SavedDataDefinition
+                {
+                    Name = definition.Name,
+                    ParentDefinitionName = definition.ParentDefinitionName,
+                    IdItemName = definition.IdItemName,
+                    Items = definition.Items.ToList()
+                });
+            }
+
+            foreach (var record in viewModel.DataRecords)
+            {
+                saveData.DataRecords.Add(new SavedDataRecord
+                {
+                    Name = record.Name,
+                    DefinitionName = record.DefinitionName,
+                    Attributes = record.Attributes.Select(CreateSavedAttribute).ToList()
                 });
             }
 
@@ -998,6 +1772,9 @@ namespace DrawingTool
                 item.VectorElements = definition.VectorElements
                     .Select(CreateSavedVectorElement)
                     .ToList();
+                item.Attributes = GetDrawingElementAttributes(canvas)
+                    .Select(CreateSavedAttribute)
+                    .ToList();
             }
             else if (element is Rectangle rectangle)
             {
@@ -1005,6 +1782,9 @@ namespace DrawingTool
                 item.Y = Canvas.GetTop(rectangle);
                 item.Width = rectangle.Width;
                 item.Height = rectangle.Height;
+                item.Attributes = GetDrawingElementAttributes(rectangle)
+                    .Select(CreateSavedAttribute)
+                    .ToList();
             }
             else if (element is Line line)
             {
@@ -1012,6 +1792,9 @@ namespace DrawingTool
                 item.Y = line.Y1;
                 item.X2 = line.X2;
                 item.Y2 = line.Y2;
+                item.Attributes = GetDrawingElementAttributes(line)
+                    .Select(CreateSavedAttribute)
+                    .ToList();
 
                 if (GetEndpointNode(line, true) is ConnectionNode startNode && nodeNumbers.TryGetValue(startNode, out int startNodeId))
                 {
@@ -1853,3 +2636,4 @@ namespace DrawingTool
         private void UpdateHandlePositions(UIElement e) { if (e is Rectangle r) { Canvas.SetLeft(rectResizeHandle, Canvas.GetLeft(r) + r.Width - 8); Canvas.SetTop(rectResizeHandle, Canvas.GetTop(r) + r.Height - 8); } else if (e is Line l) { lineStartHandle.Fill = IsConnectedLineEndpoint(l, true) ? Brushes.Gold : Brushes.Green; lineEndHandle.Fill = IsConnectedLineEndpoint(l, false) ? Brushes.Gold : Brushes.Green; Canvas.SetLeft(lineStartHandle, l.X1 - 8); Canvas.SetTop(lineStartHandle, l.Y1 - 8); Canvas.SetLeft(lineEndHandle, l.X2 - 8); Canvas.SetTop(lineEndHandle, l.Y2 - 8); } }
     }
 }
+

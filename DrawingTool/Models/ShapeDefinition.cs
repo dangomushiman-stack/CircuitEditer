@@ -14,11 +14,12 @@ namespace DrawingTool.Models
         public int GridHeightCount { get; set; } = 3;
         public List<Point> ConnectionPoints { get; set; } = new List<Point>();
         public List<SymbolVectorElement> VectorElements { get; set; } = new List<SymbolVectorElement>();
+        public List<SymbolAttribute> Attributes { get; set; } = new List<SymbolAttribute>();
 
         public LineRoleType LineRole { get; set; } = LineRoleType.Normal;
 
         public string DisplayText => $"[{Id}] {Type}" +
-            (Type == "Symbol" ? $" ({GridWidthCount}x{GridHeightCount} grid / {ConnectionPoints.Count} ports / {VectorElements.Count} vectors)" : "") +
+            (Type == "Symbol" ? $" ({GridWidthCount}x{GridHeightCount} grid / {ConnectionPoints.Count} ports / {VectorElements.Count} vectors / {Attributes.Count} attrs)" : "") +
             (Type == "Line" && LineRole == LineRoleType.WireA ? " (WireA)" : "") +
             (Type == "Line" && LineRole == LineRoleType.WireB ? " (WireB)" : "") +
             (Type == "Line" && LineRole == LineRoleType.WireC ? " (WireC)" : "") +

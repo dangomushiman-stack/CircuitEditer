@@ -14,7 +14,14 @@
             <Button Content="選択図形を削除" Click="BtnDeleteSelected_Click" Padding="12,3" Margin="10,0,0,0"/>
         </ToolBar>
 
-        <TabControl Name="RightTabControl" DockPanel.Dock="Right" Width="300" Margin="5">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="5"/>
+                <ColumnDefinition Width="300" MinWidth="220"/>
+            </Grid.ColumnDefinitions>
+
+        <TabControl Name="RightTabControl" Grid.Column="2" Margin="5">
             <TabItem Header="図形選択">
                 <DockPanel Margin="5">
                     <TextBlock Text="描画する図形（マスター）を選択：" DockPanel.Dock="Top" Margin="0,0,0,5"/>
@@ -32,6 +39,9 @@
                         <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
                     <TextBlock Grid.Row="0"
@@ -52,7 +62,37 @@
                     <ListBox Grid.Row="3"
                              Name="lstPlacedSymbols"
                              ItemsSource="{Binding PlacedSymbols}"
-                             DisplayMemberPath="DisplayText"/>
+                             DisplayMemberPath="DisplayText"
+                             SelectionChanged="LstPlacedSymbols_SelectionChanged"/>
+
+                    <TextBlock Grid.Row="4"
+                               Text="選択した配置済み図形の対応情報:"
+                               Margin="0,10,0,5"
+                               FontWeight="Bold"/>
+                    <StackPanel Grid.Row="5">
+                        <ComboBox Name="cmbPlacedSymbolDataDefinition"
+                                  ItemsSource="{Binding DataDefinitions}"
+                                  DisplayMemberPath="DisplayText"
+                                  SelectionChanged="CmbPlacedSymbolDataDefinition_SelectionChanged"
+                                  Margin="0,0,0,5"
+                                  Padding="2"/>
+                        <ComboBox Name="cmbPlacedDataRecord"
+                                  DisplayMemberPath="DisplayText"
+                                  Margin="0,0,0,5"
+                                  Padding="2"/>
+                        <Button Content="追加データを対応情報へ割付"
+                                Click="BtnAssignDataRecordToPlaced_Click"
+                                Padding="6,2"
+                                Margin="0,0,0,5"/>
+                        <TextBlock Text="割付済み対応情報:" Margin="0,0,0,2"/>
+                        <TextBox Name="txtPlacedSymbolAttributes"
+                                 Height="90"
+                                 IsReadOnly="True"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 Margin="0,0,0,5"/>
+                    </StackPanel>
                 </Grid>
             </TabItem>
             
@@ -120,9 +160,105 @@
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
+
+            <TabItem Header="データ定義">
+                <DockPanel Margin="10">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Text="データ定義名:" Margin="0,0,0,2"/>
+                        <TextBox Name="txtDataDefinitionName" Margin="0,0,0,8" Padding="2"/>
+
+                        <TextBlock Text="親データ定義:" Margin="0,0,0,2"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <ComboBox Name="cmbParentDataDefinition"
+                                      Width="170"
+                                      ItemsSource="{Binding DataDefinitions}"
+                                      DisplayMemberPath="DisplayText"
+                                      Padding="2"/>
+                            <Button Content="親なし" Click="BtnClearParentDataDefinition_Click" Padding="6,2" Margin="5,0,0,0"/>
+                        </StackPanel>
+
+                        <TextBlock Text="項目名:" Margin="0,0,0,2"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <TextBox Name="txtDataItemName" Width="170" Padding="2"/>
+                            <Button Content="項目追加" Click="BtnAddDataItem_Click" Padding="6,2" Margin="5,0,0,0"/>
+                        </StackPanel>
+
+                        <ListBox Name="lstTempDataItems"
+                                 Height="100"
+                                 ItemsSource="{Binding TempDataItems}"
+                                 Margin="0,0,0,8"/>
+
+                        <TextBlock Text="ID項目:" Margin="0,0,0,2"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <ComboBox Name="cmbDataDefinitionIdItem"
+                                      Width="170"
+                                      ItemsSource="{Binding TempDataItems}"
+                                      Padding="2"/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                            <Button Content="選択項目を削除" Click="BtnRemoveDataItem_Click" Padding="6,2"/>
+                            <Button Content="項目クリア" Click="BtnClearDataItems_Click" Padding="6,2" Margin="5,0,0,0"/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                            <Button Content="データ定義を登録" Click="BtnRegisterDataDefinition_Click" Padding="6,2"/>
+                            <Button Content="選択定義を読み込み" Click="BtnLoadDataDefinition_Click" Padding="6,2" Margin="5,0,0,0"/>
+                            <Button Content="選択定義を更新" Click="BtnUpdateDataDefinition_Click" Padding="6,2" Margin="5,0,0,0"/>
+                        </StackPanel>
+
+                        <TextBlock Text="登録済みデータ定義:" FontWeight="Bold" Margin="0,0,0,5"/>
+                    </StackPanel>
+
+                    <ListBox Name="lstDataDefinitions"
+                             ItemsSource="{Binding DataDefinitions}"
+                             SelectedItem="{Binding SelectedDataDefinition, Mode=TwoWay}"
+                             DisplayMemberPath="DisplayText"/>
+                </DockPanel>
+            </TabItem>
+
+            <TabItem Header="データ入力">
+                <DockPanel Margin="10">
+                    <StackPanel DockPanel.Dock="Top">
+                        <ComboBox Name="cmbRecordDataDefinition"
+                                  ItemsSource="{Binding DataDefinitions}"
+                                  DisplayMemberPath="DisplayText"
+                                  SelectedItem="{Binding SelectedDataDefinition, Mode=TwoWay}"
+                                  SelectionChanged="CmbRecordDataDefinition_SelectionChanged"
+                                  Margin="0,0,0,5"
+                                  Padding="2"/>
+                        <Button Content="定義項目から値欄を作成" Click="BtnCreateRecordFields_Click" Padding="6,2" Margin="0,0,0,5"/>
+                        <ScrollViewer Height="140"
+                                      VerticalScrollBarVisibility="Auto"
+                                      Margin="0,0,0,5">
+                            <StackPanel Name="pnlDataRecordFields"/>
+                        </ScrollViewer>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button Content="追加データを登録" Click="BtnRegisterDataRecord_Click" Padding="6,2"/>
+                            <Button Content="選択データを読込" Click="BtnLoadDataRecord_Click" Padding="6,2" Margin="5,0,0,0"/>
+                            <Button Content="選択データを更新" Click="BtnUpdateDataRecord_Click" Padding="6,2" Margin="5,0,0,0"/>
+                        </StackPanel>
+                        <TextBlock Text="登録済み追加データ:" FontWeight="Bold" Margin="0,0,0,5"/>
+                    </StackPanel>
+
+                    <ListBox Name="lstDataRecords"
+                             ItemsSource="{Binding DataRecords}"
+                             SelectedItem="{Binding SelectedDataRecord, Mode=TwoWay}"
+                             DisplayMemberPath="DisplayText"/>
+                </DockPanel>
+            </TabItem>
         </TabControl>
 
-        <Canvas x:Name="DrawCanvas" MouseLeftButtonDown="Canvas_MouseLeftButtonDown" MouseMove="Canvas_MouseMove" MouseLeftButtonUp="Canvas_MouseLeftButtonUp">
+        <GridSplitter Grid.Column="1"
+                      Width="5"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch"
+                      Background="#DDDDDD"
+                      ResizeDirection="Columns"
+                      ResizeBehavior="PreviousAndNext"
+                      ShowsPreview="True"/>
+
+        <Canvas Grid.Column="0" x:Name="DrawCanvas" MouseLeftButtonDown="Canvas_MouseLeftButtonDown" MouseMove="Canvas_MouseMove" MouseLeftButtonUp="Canvas_MouseLeftButtonUp">
             <Canvas.Background>
                 <DrawingBrush TileMode="Tile" Viewport="0,0,20,20" ViewportUnits="Absolute">
                     <DrawingBrush.Drawing>
@@ -138,5 +274,6 @@
                 </DrawingBrush>
             </Canvas.Background>
         </Canvas>
+        </Grid>
     </DockPanel>
 </Window>

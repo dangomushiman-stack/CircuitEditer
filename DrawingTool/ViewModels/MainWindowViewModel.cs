@@ -11,11 +11,17 @@ namespace DrawingTool.ViewModels
         public ObservableCollection<ShapeDefinition> RegisteredShapes { get; } = new ObservableCollection<ShapeDefinition>();
         public ObservableCollection<ShapeDefinition> RegisteredSymbols { get; } = new ObservableCollection<ShapeDefinition>();
         public ObservableCollection<PlacedDrawingInfo> PlacedSymbols { get; } = new ObservableCollection<PlacedDrawingInfo>();
+        public ObservableCollection<DataDefinition> DataDefinitions { get; } = new ObservableCollection<DataDefinition>();
+        public ObservableCollection<DataRecord> DataRecords { get; } = new ObservableCollection<DataRecord>();
         public List<Point> TempConnectionPoints { get; } = new List<Point>();
         public List<SymbolVectorElement> TempVectorElements { get; } = new List<SymbolVectorElement>();
+        public List<SymbolAttribute> TempAttributes { get; } = new List<SymbolAttribute>();
+        public ObservableCollection<string> TempDataItems { get; } = new ObservableCollection<string>();
 
         private ShapeDefinition? selectedShape;
         private ShapeDefinition? selectedRegisteredSymbol;
+        private DataDefinition? selectedDataDefinition;
+        private DataRecord? selectedDataRecord;
 
         public ShapeDefinition? SelectedShape
         {
@@ -27,6 +33,18 @@ namespace DrawingTool.ViewModels
         {
             get => selectedRegisteredSymbol;
             set => SetProperty(ref selectedRegisteredSymbol, value);
+        }
+
+        public DataDefinition? SelectedDataDefinition
+        {
+            get => selectedDataDefinition;
+            set => SetProperty(ref selectedDataDefinition, value);
+        }
+
+        public DataRecord? SelectedDataRecord
+        {
+            get => selectedDataRecord;
+            set => SetProperty(ref selectedDataRecord, value);
         }
 
         public MainWindowViewModel()
@@ -60,6 +78,13 @@ namespace DrawingTool.ViewModels
                         Y2 = element.Y2
                     })
                     .ToList(),
+                Attributes = TempAttributes
+                    .Select(attribute => new SymbolAttribute
+                    {
+                        Key = attribute.Key,
+                        Value = attribute.Value
+                    })
+                    .ToList(),
                 LineRole = lineRole
             };
 
@@ -82,6 +107,11 @@ namespace DrawingTool.ViewModels
         public void ClearTempVectorElements()
         {
             TempVectorElements.Clear();
+        }
+
+        public void ClearTempAttributes()
+        {
+            TempAttributes.Clear();
         }
 
         public void RefreshPlacedDrawings(IEnumerable<PlacedDrawingInfo> drawings)
@@ -109,6 +139,62 @@ namespace DrawingTool.ViewModels
 
             SelectedShape = RegisteredShapes.FirstOrDefault();
             SelectedRegisteredSymbol = RegisteredSymbols.FirstOrDefault();
+        }
+
+        public DataDefinition RegisterDataDefinition(string name, string parentDefinitionName, string idItemName)
+        {
+            var definition = new DataDefinition
+            {
+                Name = name,
+                ParentDefinitionName = parentDefinitionName,
+                IdItemName = idItemName
+            };
+            foreach (var item in TempDataItems)
+            {
+                definition.Items.Add(item);
+            }
+
+            DataDefinitions.Add(definition);
+            SelectedDataDefinition = definition;
+            return definition;
+        }
+
+        public void ReplaceDataDefinitions(IEnumerable<DataDefinition> definitions)
+        {
+            DataDefinitions.Clear();
+            foreach (var definition in definitions)
+            {
+                DataDefinitions.Add(definition);
+            }
+
+            SelectedDataDefinition = DataDefinitions.FirstOrDefault();
+        }
+
+        public DataRecord RegisterDataRecord(string name, DataDefinition definition, IEnumerable<SymbolAttribute> attributes)
+        {
+            var record = new DataRecord
+            {
+                Name = name,
+                DefinitionName = definition.Name,
+                Attributes = attributes
+                    .Select(attribute => new SymbolAttribute { Key = attribute.Key, Value = attribute.Value })
+                    .ToList()
+            };
+
+            DataRecords.Add(record);
+            SelectedDataRecord = record;
+            return record;
+        }
+
+        public void ReplaceDataRecords(IEnumerable<DataRecord> records)
+        {
+            DataRecords.Clear();
+            foreach (var record in records)
+            {
+                DataRecords.Add(record);
+            }
+
+            SelectedDataRecord = DataRecords.FirstOrDefault();
         }
     }
 }

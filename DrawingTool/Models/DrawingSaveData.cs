@@ -6,8 +6,25 @@ namespace DrawingTool.Models
     {
         public int Version { get; set; } = 1;
         public List<SavedShapeDefinition> ShapeDefinitions { get; set; } = new List<SavedShapeDefinition>();
+        public List<SavedDataDefinition> DataDefinitions { get; set; } = new List<SavedDataDefinition>();
+        public List<SavedDataRecord> DataRecords { get; set; } = new List<SavedDataRecord>();
         public List<SavedDrawingItem> Items { get; set; } = new List<SavedDrawingItem>();
         public List<SavedConnectionNode> ConnectionNodes { get; set; } = new List<SavedConnectionNode>();
+    }
+
+    public class SavedDataDefinition
+    {
+        public string Name { get; set; } = "";
+        public string ParentDefinitionName { get; set; } = "";
+        public string IdItemName { get; set; } = "";
+        public List<string> Items { get; set; } = new List<string>();
+    }
+
+    public class SavedDataRecord
+    {
+        public string Name { get; set; } = "";
+        public string DefinitionName { get; set; } = "";
+        public List<SavedSymbolAttribute> Attributes { get; set; } = new List<SavedSymbolAttribute>();
     }
 
     public class SavedShapeDefinition
@@ -21,6 +38,13 @@ namespace DrawingTool.Models
         public string LineRole { get; set; } = "";
         public List<SavedPoint> ConnectionPoints { get; set; } = new List<SavedPoint>();
         public List<SavedSymbolVectorElement> VectorElements { get; set; } = new List<SavedSymbolVectorElement>();
+        public List<SavedSymbolAttribute> Attributes { get; set; } = new List<SavedSymbolAttribute>();
+    }
+
+    public class SavedSymbolAttribute
+    {
+        public string Key { get; set; } = "";
+        public string Value { get; set; } = "";
     }
 
     public class SavedSymbolVectorElement
@@ -44,6 +68,7 @@ namespace DrawingTool.Models
         public double Width { get; set; }
         public double Height { get; set; }
         public List<SavedSymbolVectorElement> VectorElements { get; set; } = new List<SavedSymbolVectorElement>();
+        public List<SavedSymbolAttribute> Attributes { get; set; } = new List<SavedSymbolAttribute>();
         public int? StartNodeId { get; set; }
         public int? EndNodeId { get; set; }
         public SavedLineEndpointConnection? StartConnection { get; set; }

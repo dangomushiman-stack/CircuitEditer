@@ -1,3 +1,5 @@
+using System.Windows;
+
 namespace DrawingTool.Models
 {
     public class PlacedDrawingInfo
@@ -15,6 +17,8 @@ namespace DrawingTool.Models
         public int GridWidthCount { get; set; }
         public int GridHeightCount { get; set; }
         public int ConnectionPointCount { get; set; }
+        public int AttributeCount { get; set; }
+        public UIElement? Element { get; set; }
 
         public string DisplayText
         {
