@@ -18,6 +18,8 @@ namespace DrawingTool.Models
 
         public LineRoleType LineRole { get; set; } = LineRoleType.Normal;
         public bool IsLineGroupTarget { get; set; }
+        public string LineGroupDataDefinitionName { get; set; } = "";
+        public bool AutoCreateLineGroupData { get; set; }
 
         public string DisplayText => $"[{Id}] {Type}" +
             (Type == "Symbol" ? $" ({GridWidthCount}x{GridHeightCount} grid / {ConnectionPoints.Count} ports / {VectorElements.Count} vectors / {Attributes.Count} attrs)" : "") +
@@ -25,6 +27,8 @@ namespace DrawingTool.Models
             (Type == "Line" && LineRole == LineRoleType.WireB ? " (WireB)" : "") +
             (Type == "Line" && LineRole == LineRoleType.WireC ? " (WireC)" : "") +
             (Type == "Line" && LineRole == LineRoleType.Bus ? " (Bus)" : "") +
-            (Type == "Line" && IsLineGroupTarget ? " (GroupTarget)" : "");
+            (Type == "Line" && IsLineGroupTarget ? " (GroupTarget)" : "") +
+            (Type == "Line" && !string.IsNullOrWhiteSpace(LineGroupDataDefinitionName) ? $" Data={LineGroupDataDefinitionName}" : "") +
+            (Type == "Line" && AutoCreateLineGroupData ? " AutoData" : "");
     }
 }

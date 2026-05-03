@@ -51,6 +51,7 @@ namespace DrawingTool
         private UIElement currentElement = null;
         private Rectangle selectionBox;
         private Line selectionLineHighlight;
+        private readonly List<Line> selectionLineGroupHighlights = new List<Line>();
         private Rectangle rectResizeHandle, lineStartHandle, lineEndHandle, activeHandle;
         private bool isDrawingEditorVector = false;
         private bool isLoadingSymbolDefinition = false;
@@ -90,6 +91,26 @@ namespace DrawingTool
 
         private Line CreateLineElement(ShapeDefinition def, Point start, Point end)
         {
+            var style = GetLineBaseStyle(def);
+
+            return new Line
+            {
+                Stroke = style.Brush,
+                StrokeThickness = style.Thickness,
+                MinWidth = 12,
+                MinHeight = 12,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                X1 = start.X,
+                Y1 = start.Y,
+                X2 = end.X,
+                Y2 = end.Y,
+                Tag = def
+            };
+        }
+
+        private (Brush Brush, double Thickness) GetLineBaseStyle(ShapeDefinition def)
+        {
             Brush brush = Brushes.Black;
             double thickness = 2;
 
@@ -111,20 +132,7 @@ namespace DrawingTool
                 brush = Brushes.DarkCyan;
             }
 
-            return new Line
-            {
-                Stroke = brush,
-                StrokeThickness = thickness,
-                MinWidth = 12,
-                MinHeight = 12,
-                StrokeStartLineCap = PenLineCap.Round,
-                StrokeEndLineCap = PenLineCap.Round,
-                X1 = start.X,
-                Y1 = start.Y,
-                X2 = end.X,
-                Y2 = end.Y,
-                Tag = def
-            };
+            return (brush, thickness);
         }
 
         public MainWindow()
@@ -232,6 +240,7 @@ namespace DrawingTool
             foreach (var group in GetLineGroupComponents())
             {
                 string groupKey = GetLineGroupKey(group);
+                EnsureLineGroupDataRecord(group, false);
                 lineGroupDataReferences.TryGetValue(groupKey, out var reference);
                 lineGroups.Add(new PlacedDrawingInfo
                 {
@@ -248,6 +257,32 @@ namespace DrawingTool
 
             viewModel.RefreshPlacedDrawings(placedDrawings);
             viewModel.RefreshLineGroups(lineGroups);
+            RestorePlacedListSelection();
+            ApplyDataVisualStateToAllDrawingElements();
+            if (!string.IsNullOrWhiteSpace(selectedLineGroupKey))
+            {
+                ShowLineGroupSelectionHighlight(selectedLineGroupKey);
+            }
+        }
+
+        private void RestorePlacedListSelection()
+        {
+            if (!string.IsNullOrWhiteSpace(selectedLineGroupKey))
+            {
+                var selectedGroup = viewModel.LineGroups
+                    .FirstOrDefault(item => item.LineGroupKey == selectedLineGroupKey);
+                if (selectedGroup != null)
+                {
+                    lstLineGroups.SelectedItem = selectedGroup;
+                    lstLineGroups.ScrollIntoView(selectedGroup);
+                }
+                return;
+            }
+
+            if (currentElement != null && IsSavedDrawingElement(currentElement))
+            {
+                SelectPlacedSymbolListItem(currentElement);
+            }
         }
 
         private void EditorCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) {
@@ -338,11 +373,15 @@ namespace DrawingTool
                 Name = itemName,
                 ReferenceDefinitionName = isReferenceItem && cmbDataItemReferenceDefinition.SelectedItem is DataDefinition referenceDefinition
                     ? referenceDefinition.Name
-                    : ""
+                    : "",
+                UsePythonValueGenerator = chkUsePythonValueGenerator.IsChecked == true,
+                PythonValueGeneratorCode = txtPythonValueGeneratorCode.Text
             });
             txtDataItemName.Clear();
             chkDataItemIsReference.IsChecked = false;
             cmbDataItemReferenceDefinition.SelectedItem = null;
+            chkUsePythonValueGenerator.IsChecked = false;
+            txtPythonValueGeneratorCode.Clear();
         }
 
         private void LstTempDataItems_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -356,6 +395,8 @@ namespace DrawingTool
             chkDataItemIsReference.IsChecked = !string.IsNullOrWhiteSpace(item.ReferenceDefinitionName);
             cmbDataItemReferenceDefinition.SelectedItem = viewModel.DataDefinitions
                 .FirstOrDefault(definition => definition.Name == item.ReferenceDefinitionName);
+            chkUsePythonValueGenerator.IsChecked = item.UsePythonValueGenerator;
+            txtPythonValueGeneratorCode.Text = item.PythonValueGeneratorCode;
         }
 
         private void BtnUpdateDataItem_Click(object sender, RoutedEventArgs e)
@@ -393,7 +434,9 @@ namespace DrawingTool
                 Name = itemName,
                 ReferenceDefinitionName = isReferenceItem && cmbDataItemReferenceDefinition.SelectedItem is DataDefinition referenceDefinition
                     ? referenceDefinition.Name
-                    : ""
+                    : "",
+                UsePythonValueGenerator = chkUsePythonValueGenerator.IsChecked == true,
+                PythonValueGeneratorCode = txtPythonValueGeneratorCode.Text
             };
             viewModel.TempDataItems[selectedIndex] = updatedItem;
             lstTempDataItems.SelectedItem = updatedItem;
@@ -562,7 +605,9 @@ namespace DrawingTool
             return new DataDefinitionItem
             {
                 Name = item.Name,
-                ReferenceDefinitionName = item.ReferenceDefinitionName
+                ReferenceDefinitionName = item.ReferenceDefinitionName,
+                UsePythonValueGenerator = item.UsePythonValueGenerator,
+                PythonValueGeneratorCode = item.PythonValueGeneratorCode
             };
         }
 
@@ -726,6 +771,7 @@ namespace DrawingTool
             lstDataDefinitions.Items.Refresh();
             cmbParentDataDefinition.Items.Refresh();
             cmbDataItemReferenceDefinition.Items.Refresh();
+            cmbShapeLineGroupDataDefinition.Items.Refresh();
             cmbPlacedSymbolDataDefinition.Items.Refresh();
             cmbLineGroupDataDefinition.Items.Refresh();
             cmbRecordDataDefinition.Items.Refresh();
@@ -812,6 +858,40 @@ namespace DrawingTool
             {
                 MessageBox.Show(this, $"Python採番に失敗しました。\n{ex.Message}", "追加データ", MessageBoxButton.OK, MessageBoxImage.Error);
             }
+        }
+
+        private void BtnGenerateDataRecordValues_Click(object sender, RoutedEventArgs e)
+        {
+            if (cmbRecordDataDefinition.SelectedItem is not DataDefinition definition)
+            {
+                MessageBox.Show(this, "データ定義を選択してください。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            EnsureDataRecordFieldInputs(definition);
+            var generatedCount = 0;
+
+            foreach (var item in GetDataDefinitionItemDefinitionsIncludingParents(definition)
+                         .Where(item => item.UsePythonValueGenerator && !string.IsNullOrWhiteSpace(item.PythonValueGeneratorCode)))
+            {
+                try
+                {
+                    string value = GenerateDataRecordValueWithPython(
+                        definition,
+                        item,
+                        ReadDataRecordFieldInputs(),
+                        out _);
+                    SetDataRecordFieldInput(item.Name, value);
+                    generatedCount++;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, $"項目「{item.Name}」のPython自動設定に失敗しました。\n{ex.Message}", "追加データ", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+            }
+
+            MessageBox.Show(this, $"{generatedCount}項目をPythonで自動設定しました。", "追加データ", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private void CmbRecordDataDefinition_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1057,6 +1137,15 @@ namespace DrawingTool
             IEnumerable<SymbolAttribute> attributes,
             out string message)
         {
+            return GenerateDataRecordIdWithPython(definition, attributes, null, out message);
+        }
+
+        private string GenerateDataRecordIdWithPython(
+            DataDefinition definition,
+            IEnumerable<SymbolAttribute> attributes,
+            Dictionary<string, object>? extraContext,
+            out string message)
+        {
             message = "";
             var input = attributes
                 .GroupBy(attribute => attribute.Key)
@@ -1065,19 +1154,13 @@ namespace DrawingTool
             var payload = new
             {
                 code = definition.PythonIdGeneratorCode,
+                function_name = "generate_id",
                 input,
                 tables = CreateCsvTablePayload(saveData),
-                context = new
-                {
-                    definition = definition.Name,
-                    id_item = definition.IdItemName,
-                    data_record_table = $"data_records_{CreateSafeFileNamePart(definition.Name)}",
-                    placed_item_data_table = $"placed_item_data_{CreateSafeFileNamePart(definition.Name)}",
-                    line_group_data_table = $"line_group_data_{CreateSafeFileNamePart(definition.Name)}"
-                }
+                context = CreatePythonContext(definition, null, extraContext)
             };
 
-            string output = RunPythonIdGeneratorProcess(JsonSerializer.Serialize(payload));
+            string output = RunPythonGeneratorProcess(JsonSerializer.Serialize(payload));
             using var document = JsonDocument.Parse(output);
             if (document.RootElement.ValueKind == JsonValueKind.String)
             {
@@ -1104,10 +1187,132 @@ namespace DrawingTool
             return "";
         }
 
-        private string RunPythonIdGeneratorProcess(string payloadJson)
+        private string GenerateDataRecordValueWithPython(
+            DataDefinition definition,
+            DataDefinitionItem item,
+            IEnumerable<SymbolAttribute> attributes,
+            out string message)
+        {
+            return GenerateDataRecordValueWithPython(definition, item, attributes, null, out message);
+        }
+
+        private string GenerateDataRecordValueWithPython(
+            DataDefinition definition,
+            DataDefinitionItem item,
+            IEnumerable<SymbolAttribute> attributes,
+            Dictionary<string, object>? extraContext,
+            out string message)
+        {
+            message = "";
+            var input = attributes
+                .GroupBy(attribute => attribute.Key)
+                .ToDictionary(group => group.Key, group => group.First().Value);
+            var saveData = CreateSaveData();
+            var payload = new
+            {
+                code = item.PythonValueGeneratorCode,
+                function_name = "generate_value",
+                input,
+                tables = CreateCsvTablePayload(saveData),
+                context = CreatePythonContext(definition, item, extraContext)
+            };
+
+            string output = RunPythonGeneratorProcess(JsonSerializer.Serialize(payload));
+            using var document = JsonDocument.Parse(output);
+            if (document.RootElement.ValueKind == JsonValueKind.String)
+            {
+                return document.RootElement.GetString() ?? "";
+            }
+
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return "";
+            }
+
+            if (document.RootElement.TryGetProperty("message", out var messageElement))
+            {
+                message = messageElement.GetString() ?? "";
+            }
+
+            if (document.RootElement.TryGetProperty("value", out var valueElement))
+            {
+                return valueElement.ValueKind == JsonValueKind.String
+                    ? valueElement.GetString() ?? ""
+                    : valueElement.ToString();
+            }
+
+            if (document.RootElement.TryGetProperty("id", out var idElement))
+            {
+                return idElement.ValueKind == JsonValueKind.String
+                    ? idElement.GetString() ?? ""
+                    : idElement.ToString();
+            }
+
+            return "";
+        }
+
+        private Dictionary<string, object> CreatePythonContext(
+            DataDefinition definition,
+            DataDefinitionItem? item,
+            Dictionary<string, object>? extraContext)
+        {
+            var context = new Dictionary<string, object>
+            {
+                ["definition"] = definition.Name,
+                ["id_item"] = definition.IdItemName,
+                ["data_record_table"] = $"data_records_{CreateSafeFileNamePart(definition.Name)}",
+                ["placed_item_data_table"] = $"placed_item_data_{CreateSafeFileNamePart(definition.Name)}",
+                ["line_group_data_table"] = $"line_group_data_{CreateSafeFileNamePart(definition.Name)}",
+                ["data"] = CreatePythonDataDictionary()
+            };
+
+            if (item != null)
+            {
+                context["item"] = item.Name;
+            }
+
+            if (extraContext != null)
+            {
+                foreach (var pair in extraContext)
+                {
+                    context[pair.Key] = pair.Value;
+                }
+            }
+
+            return context;
+        }
+
+        private Dictionary<string, Dictionary<string, Dictionary<string, string>>> CreatePythonDataDictionary()
+        {
+            var result = new Dictionary<string, Dictionary<string, Dictionary<string, string>>>();
+            foreach (var record in viewModel.DataRecords)
+            {
+                if (!result.TryGetValue(record.DefinitionName, out var recordsById))
+                {
+                    recordsById = new Dictionary<string, Dictionary<string, string>>();
+                    result[record.DefinitionName] = recordsById;
+                }
+
+                var values = record.Attributes
+                    .GroupBy(attribute => attribute.Key)
+                    .ToDictionary(group => group.Key, group => group.First().Value);
+                values["DataId"] = record.Name;
+                var definition = viewModel.DataDefinitions.FirstOrDefault(item => item.Name == record.DefinitionName);
+                if (definition != null && !string.IsNullOrWhiteSpace(definition.IdItemName))
+                {
+                    values[definition.IdItemName] = record.Name;
+                }
+
+                recordsById[record.Name] = values;
+            }
+
+            return result;
+        }
+
+        private string RunPythonGeneratorProcess(string payloadJson)
         {
             string wrapperPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"drawingtool-id-generator-{Guid.NewGuid():N}.py");
-            File.WriteAllText(wrapperPath, CreatePythonIdGeneratorWrapper(), new UTF8Encoding(false));
+            File.WriteAllText(wrapperPath, CreatePythonGeneratorWrapper(), new UTF8Encoding(false));
 
             try
             {
@@ -1165,7 +1370,7 @@ namespace DrawingTool
             }
         }
 
-        private string CreatePythonIdGeneratorWrapper()
+        private string CreatePythonGeneratorWrapper()
         {
             return """
 import json
@@ -1176,11 +1381,12 @@ try:
     payload = json.loads(sys.stdin.read())
     namespace = {}
     exec(payload.get("code", ""), namespace, namespace)
-    generate_id = namespace.get("generate_id")
-    if generate_id is None:
-        raise RuntimeError("generate_id(input, tables, context) is not defined")
+    function_name = payload.get("function_name", "generate_id")
+    generator = namespace.get(function_name)
+    if generator is None:
+        raise RuntimeError(f"{function_name}(input, tables, context) is not defined")
 
-    result = generate_id(
+    result = generator(
         payload.get("input", {}),
         payload.get("tables", {}),
         payload.get("context", {})
@@ -1188,7 +1394,8 @@ try:
     if isinstance(result, dict):
         output = result
     else:
-        output = {"id": "" if result is None else str(result)}
+        key = "id" if function_name == "generate_id" else "value"
+        output = {key: "" if result is None else str(result)}
     print(json.dumps(output, ensure_ascii=False))
 except Exception:
     traceback.print_exc(file=sys.stderr)
@@ -1414,25 +1621,19 @@ except Exception:
         }
 
         private void BtnRegisterShape_Click(object sender, RoutedEventArgs e) {
-            LineRoleType role = LineRoleType.Normal;
-            if (rbLineWireA.IsChecked == true) role = LineRoleType.WireA;
-            else if (rbLineWireB.IsChecked == true) role = LineRoleType.WireB;
-            else if (rbLineWireC.IsChecked == true) role = LineRoleType.WireC;
-            else if (rbLineBus.IsChecked == true) role = LineRoleType.Bus;
-            bool isLineGroupTarget = ((ComboBoxItem)cmbShapeType.SelectedItem).Tag.ToString() == "Line" &&
-                                     chkLineGroupTarget.IsChecked == true;
-
             viewModel.TempAttributes.Clear();
 
             var def = viewModel.RegisterShape(
                 txtShapeId.Text,
-                ((ComboBoxItem)cmbShapeType.SelectedItem).Tag.ToString(),
+                GetSelectedShapeType(),
                 GetSymbolFixedWidth(),
                 GetSymbolFixedHeight(),
                 GetSymbolGridWidthCount(),
                 GetSymbolGridHeightCount(),
-                role,
-                isLineGroupTarget);
+                GetSelectedLineRole(),
+                IsSelectedLineGroupTarget(),
+                GetSelectedLineGroupDataDefinitionName(),
+                IsSelectedAutoCreateLineGroupData());
 
             if (def.Type == "Symbol")
             {
@@ -1445,6 +1646,40 @@ except Exception:
             }
 
             lstShapes.SelectedItem = def;
+        }
+
+        private string GetSelectedShapeType()
+        {
+            return ((ComboBoxItem)cmbShapeType.SelectedItem).Tag.ToString() ?? "Line";
+        }
+
+        private LineRoleType GetSelectedLineRole()
+        {
+            if (rbLineWireA.IsChecked == true) return LineRoleType.WireA;
+            if (rbLineWireB.IsChecked == true) return LineRoleType.WireB;
+            if (rbLineWireC.IsChecked == true) return LineRoleType.WireC;
+            if (rbLineBus.IsChecked == true) return LineRoleType.Bus;
+            return LineRoleType.Normal;
+        }
+
+        private bool IsSelectedLineGroupTarget()
+        {
+            return GetSelectedShapeType() == "Line" && chkLineGroupTarget.IsChecked == true;
+        }
+
+        private string GetSelectedLineGroupDataDefinitionName()
+        {
+            return IsSelectedLineGroupTarget() &&
+                   cmbShapeLineGroupDataDefinition.SelectedItem is DataDefinition lineGroupDataDefinition
+                ? lineGroupDataDefinition.Name
+                : "";
+        }
+
+        private bool IsSelectedAutoCreateLineGroupData()
+        {
+            return IsSelectedLineGroupTarget() &&
+                   chkAutoCreateLineGroupData.IsChecked == true &&
+                   !string.IsNullOrWhiteSpace(GetSelectedLineGroupDataDefinitionName());
         }
 
         private void LstRegisteredSymbols_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1469,7 +1704,7 @@ except Exception:
                 selectedLineGroupKey = placed.LineGroupKey;
                 rbSelect.IsChecked = true;
                 HideAllHandles();
-                HideSelectionHighlight();
+                ShowLineGroupSelectionHighlight(selectedLineGroupKey);
                 LoadLineGroupDataAssignment(selectedLineGroupKey);
                 return;
             }
@@ -1516,6 +1751,18 @@ except Exception:
             return null;
         }
 
+        private void SelectPlacedSymbolListItem(UIElement element)
+        {
+            selectedLineGroupKey = "";
+            var placed = viewModel.PlacedSymbols
+                .FirstOrDefault(item => !item.IsLineGroup && ReferenceEquals(item.Element, element));
+            if (placed != null)
+            {
+                lstPlacedSymbols.SelectedItem = placed;
+                lstPlacedSymbols.ScrollIntoView(placed);
+            }
+        }
+
         private void BtnLoadSelectedSymbol_Click(object sender, RoutedEventArgs e)
         {
             if (lstRegisteredSymbols.SelectedItem is not ShapeDefinition definition)
@@ -1527,6 +1774,51 @@ except Exception:
             LoadSymbolDefinitionToEditor(definition);
         }
 
+        private void BtnLoadSelectedShapeDefinition_Click(object sender, RoutedEventArgs e)
+        {
+            if (lstShapes.SelectedItem is not ShapeDefinition definition)
+            {
+                MessageBox.Show(this, "図形選択タブで編集する図形マスターを選択してください。", "図形定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            LoadShapeDefinitionToEditor(definition);
+        }
+
+        private void BtnUpdateSelectedShapeDefinition_Click(object sender, RoutedEventArgs e)
+        {
+            if (lstShapes.SelectedItem is not ShapeDefinition definition)
+            {
+                MessageBox.Show(this, "図形選択タブで更新する図形マスターを選択してください。", "図形定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            string newId = txtShapeId.Text.Trim();
+            if (string.IsNullOrWhiteSpace(newId))
+            {
+                MessageBox.Show(this, "図形番号(ID)を入力してください。", "図形定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (viewModel.RegisteredShapes.Any(item => item != definition && item.Id == newId))
+            {
+                MessageBox.Show(this, "同じ図形番号(ID)の図形定義が既にあります。", "図形定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            string newType = GetSelectedShapeType();
+            if (definition.Type != newType && HasPlacedElementsForDefinition(definition))
+            {
+                MessageBox.Show(this, "配置済み図形がある図形定義は、種類を変更できません。種類以外の設定は変更できます。", "図形定義", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            UpdateShapeDefinitionFromEditor(definition);
+            RebuildPlacedElementsForDefinition(definition);
+            RefreshShapeDefinitionLists(definition);
+            RefreshPlacedSymbols();
+        }
+
         private void BtnUpdateSelectedSymbol_Click(object sender, RoutedEventArgs e)
         {
             if (lstRegisteredSymbols.SelectedItem is not ShapeDefinition definition)
@@ -1536,9 +1828,8 @@ except Exception:
             }
 
             UpdateSymbolDefinitionFromEditor(definition);
-            RebuildPlacedSymbolsForDefinition(definition);
-            lstRegisteredSymbols.Items.Refresh();
-            lstShapes.Items.Refresh();
+            RebuildPlacedElementsForDefinition(definition);
+            RefreshShapeDefinitionLists(definition);
             RefreshPlacedSymbols();
         }
 
@@ -1582,7 +1873,7 @@ except Exception:
             currentElement = null;
             rbSelect.IsChecked = true;
             HideAllHandles();
-            HideSelectionHighlight();
+            ShowLineGroupSelectionHighlight(selectedLineGroupKey);
             lstPlacedSymbols.SelectedItem = null;
             LoadLineGroupDataAssignmentToLineGroupTab(selectedLineGroupKey);
         }
@@ -1614,6 +1905,35 @@ except Exception:
             {
                 cmbLineGroupDataRecord.SelectedItem = null;
             }
+        }
+
+        private void BtnAutoCreateLineGroupData_Click(object sender, RoutedEventArgs e)
+        {
+            int createdCount = 0;
+
+            if (lstLineGroups.SelectedItem is PlacedDrawingInfo selectedGroup &&
+                !string.IsNullOrWhiteSpace(selectedGroup.LineGroupKey))
+            {
+                var lines = GetLinesForLineGroupKey(selectedGroup.LineGroupKey);
+                if (EnsureLineGroupDataRecord(lines, true))
+                {
+                    createdCount++;
+                }
+            }
+            else
+            {
+                foreach (var group in GetLineGroupComponents())
+                {
+                    if (EnsureLineGroupDataRecord(group, true))
+                    {
+                        createdCount++;
+                    }
+                }
+            }
+
+            RefreshLineGroupDataRecordChoices();
+            RefreshPlacedSymbols();
+            MessageBox.Show(this, $"{createdCount}件の線グループデータを自動作成しました。", "線グループ", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private void BtnAssignDataRecordToLineGroup_Click(object sender, RoutedEventArgs e)
@@ -1666,6 +1986,312 @@ except Exception:
                 drawingElementDataReferences[line] = reference;
                 drawingElementAttributes.Remove(line);
             }
+        }
+
+        private bool EnsureLineGroupDataRecord(List<Line> lines, bool showMessages)
+        {
+            if (lines.Count == 0)
+            {
+                return false;
+            }
+
+            string groupKey = GetLineGroupKey(lines);
+            if (GetLineGroupDataRecord(groupKey) != null)
+            {
+                return false;
+            }
+
+            if (lines[0].Tag is not ShapeDefinition shapeDefinition ||
+                !shapeDefinition.IsLineGroupTarget ||
+                string.IsNullOrWhiteSpace(shapeDefinition.LineGroupDataDefinitionName))
+            {
+                if (showMessages && lines.Count > 0)
+                {
+                    MessageBox.Show(this, "この線グループの図形定義には、線グループ用データ定義が設定されていません。", "線グループ", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+
+                return false;
+            }
+
+            if (!shapeDefinition.AutoCreateLineGroupData && !showMessages)
+            {
+                return false;
+            }
+
+            var dataDefinition = viewModel.DataDefinitions
+                .FirstOrDefault(definition => definition.Name == shapeDefinition.LineGroupDataDefinitionName);
+            if (dataDefinition == null || string.IsNullOrWhiteSpace(dataDefinition.IdItemName))
+            {
+                if (showMessages)
+                {
+                    MessageBox.Show(this, "線グループ用データ定義が見つからないか、ID項目が未設定です。", "線グループ", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+
+                return false;
+            }
+
+            var attributes = CreateBlankDataRecordAttributes(dataDefinition);
+            string dataId = GenerateLineGroupDataId(dataDefinition, attributes);
+            if (string.IsNullOrWhiteSpace(dataId) ||
+                HasDuplicateDataRecordId(dataDefinition.Name, dataId, null))
+            {
+                dataId = GenerateUniqueLineGroupDataId(dataDefinition);
+            }
+
+            SetAttributeValue(attributes, dataDefinition.IdItemName, dataId);
+            var record = viewModel.RegisterDataRecord(dataId, dataDefinition, attributes);
+            lineGroupDataReferences[groupKey] = new DrawingDataReference
+            {
+                DataDefinitionName = record.DefinitionName,
+                DataId = record.Name
+            };
+            ApplyLineGroupDataReferenceToLines(groupKey, record);
+            try
+            {
+                var pythonContext = CreateLineGroupPythonContext(lines, record);
+                ApplyPythonValueGeneratorsToRecord(dataDefinition, record, pythonContext);
+                SyncDataRecordIdFromAttributes(dataDefinition, record);
+            }
+            catch (Exception ex)
+            {
+                if (showMessages)
+                {
+                    MessageBox.Show(this, $"線グループデータのPython自動設定に失敗しました。\n{ex.Message}", "線グループ", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+
+            lineGroupDataReferences[groupKey] = new DrawingDataReference
+            {
+                DataDefinitionName = record.DefinitionName,
+                DataId = record.Name
+            };
+            ApplyLineGroupDataReferenceToLines(groupKey, record);
+            return true;
+        }
+
+        private List<SymbolAttribute> CreateBlankDataRecordAttributes(DataDefinition definition)
+        {
+            return GetDataDefinitionItemsIncludingParents(definition)
+                .Select(itemName => new SymbolAttribute { Key = itemName, Value = "" })
+                .ToList();
+        }
+
+        private string GenerateLineGroupDataId(DataDefinition definition, List<SymbolAttribute> attributes)
+        {
+            if (definition.UsePythonIdGenerator && !string.IsNullOrWhiteSpace(definition.PythonIdGeneratorCode))
+            {
+                try
+                {
+                    return GenerateDataRecordIdWithPython(definition, attributes, out _);
+                }
+                catch
+                {
+                    return "";
+                }
+            }
+
+            return GenerateUniqueLineGroupDataId(definition);
+        }
+
+        private void ApplyPythonValueGeneratorsToRecord(
+            DataDefinition definition,
+            DataRecord record,
+            Dictionary<string, object>? extraContext)
+        {
+            foreach (var item in GetDataDefinitionItemDefinitionsIncludingParents(definition)
+                         .Where(item => item.UsePythonValueGenerator && !string.IsNullOrWhiteSpace(item.PythonValueGeneratorCode)))
+            {
+                string value = GenerateDataRecordValueWithPython(definition, item, record.Attributes, extraContext, out _);
+                SetAttributeValue(record.Attributes, item.Name, value);
+            }
+        }
+
+        private Dictionary<string, object> CreateLineGroupPythonContext(List<Line> lines, DataRecord record)
+        {
+            var groupKey = GetLineGroupKey(lines);
+            var itemNumbers = CreateCurrentItemNumberMap();
+            var lineItemNos = lines
+                .Where(line => itemNumbers.ContainsKey(line))
+                .Select(line => itemNumbers[line])
+                .OrderBy(itemNo => itemNo)
+                .ToList();
+            var definitionId = lines[0].Tag is ShapeDefinition definition ? definition.Id : "";
+
+            return new Dictionary<string, object>
+            {
+                ["line_group"] = new Dictionary<string, object>
+                {
+                    ["key"] = groupKey,
+                    ["definition_id"] = definitionId,
+                    ["line_item_nos"] = lineItemNos,
+                    ["data_definition"] = record.DefinitionName,
+                    ["data_id"] = record.Name
+                },
+                ["connected_items"] = CreateConnectedItemsForLineGroup(lines, itemNumbers)
+            };
+        }
+
+        private Dictionary<UIElement, int> CreateCurrentItemNumberMap()
+        {
+            var result = new Dictionary<UIElement, int>();
+            int itemNo = 1;
+            foreach (UIElement element in DrawCanvas.Children)
+            {
+                if (IsSavedDrawingElement(element))
+                {
+                    result[element] = itemNo++;
+                }
+            }
+
+            return result;
+        }
+
+        private List<Dictionary<string, object>> CreateConnectedItemsForLineGroup(
+            List<Line> lines,
+            Dictionary<UIElement, int> itemNumbers)
+        {
+            var result = new List<Dictionary<string, object>>();
+            var emitted = new HashSet<string>();
+            var lineSet = lines.ToHashSet();
+
+            void AddConnectedElement(UIElement? element, string kind)
+            {
+                if (element == null)
+                {
+                    return;
+                }
+
+                if (element is Line connectedLine && lineSet.Contains(connectedLine))
+                {
+                    return;
+                }
+
+                int itemNo = itemNumbers.TryGetValue(element, out var no) ? no : 0;
+                var record = GetPythonDataRecordForConnectedElement(element);
+                string key = $"{itemNo}|{record?.DefinitionName}|{record?.Name}|{kind}";
+                if (!emitted.Add(key))
+                {
+                    return;
+                }
+
+                result.Add(new Dictionary<string, object>
+                {
+                    ["item_no"] = itemNo,
+                    ["definition_id"] = element is FrameworkElement frameworkElement && frameworkElement.Tag is ShapeDefinition definition ? definition.Id : "",
+                    ["type"] = element switch
+                    {
+                        Line => "Line",
+                        Canvas => "Symbol",
+                        Rectangle => "Rectangle",
+                        _ => ""
+                    },
+                    ["data_definition"] = record?.DefinitionName ?? "",
+                    ["data_id"] = record?.Name ?? "",
+                    ["connection_kind"] = kind
+                });
+            }
+
+            foreach (var line in lines)
+            {
+                if (lineConnections.TryGetValue(line, out var connection))
+                {
+                    AddConnectedElement(connection.StartElement, CreateConnectedItemKind(connection.StartElement));
+                    AddConnectedElement(connection.EndElement, CreateConnectedItemKind(connection.EndElement));
+                }
+
+                AddConnectedNodeItems(GetEndpointNode(line, true), lineSet, itemNumbers, AddConnectedElement);
+                AddConnectedNodeItems(GetEndpointNode(line, false), lineSet, itemNumbers, AddConnectedElement);
+            }
+
+            return result;
+        }
+
+        private void AddConnectedNodeItems(
+            ConnectionNode? node,
+            HashSet<Line> lineSet,
+            Dictionary<UIElement, int> itemNumbers,
+            Action<UIElement?, string> addConnectedElement)
+        {
+            if (node == null)
+            {
+                return;
+            }
+
+            foreach (var endpoint in node.Endpoints)
+            {
+                if (!lineSet.Contains(endpoint.Line))
+                {
+                    addConnectedElement(endpoint.Line, "ConnectionNode");
+                }
+            }
+        }
+
+        private string CreateConnectedItemKind(UIElement? element)
+        {
+            return element is Line ? "LineToLine" : "LineToSymbol";
+        }
+
+        private DataRecord? GetPythonDataRecordForConnectedElement(UIElement element)
+        {
+            if (element is Line connectedLine)
+            {
+                var group = GetLineGroupComponents()
+                    .FirstOrDefault(group => group.Contains(connectedLine));
+                if (group != null)
+                {
+                    var groupRecord = GetLineGroupDataRecord(GetLineGroupKey(group));
+                    if (groupRecord != null)
+                    {
+                        return groupRecord;
+                    }
+                }
+            }
+
+            return GetDrawingElementDataRecord(element);
+        }
+
+        private void SyncDataRecordIdFromAttributes(DataDefinition definition, DataRecord record)
+        {
+            if (string.IsNullOrWhiteSpace(definition.IdItemName))
+            {
+                return;
+            }
+
+            var idValue = record.Attributes
+                .FirstOrDefault(attribute => attribute.Key == definition.IdItemName)
+                ?.Value
+                .Trim();
+            if (!string.IsNullOrWhiteSpace(idValue) &&
+                !HasDuplicateDataRecordId(definition.Name, idValue, record))
+            {
+                record.Name = idValue;
+            }
+        }
+
+        private string GenerateUniqueLineGroupDataId(DataDefinition definition)
+        {
+            int no = 1;
+            string dataId;
+            do
+            {
+                dataId = $"LG-{no:0000}";
+                no++;
+            }
+            while (HasDuplicateDataRecordId(definition.Name, dataId, null));
+
+            return dataId;
+        }
+
+        private void SetAttributeValue(List<SymbolAttribute> attributes, string key, string value)
+        {
+            var attribute = attributes.FirstOrDefault(item => item.Key == key);
+            if (attribute == null)
+            {
+                attributes.Add(new SymbolAttribute { Key = key, Value = value });
+                return;
+            }
+
+            attribute.Value = value;
         }
 
         private List<Line> GetLinesForLineGroupKey(string groupKey)
@@ -1846,12 +2472,20 @@ except Exception:
 
         private void LoadSymbolDefinitionToEditor(ShapeDefinition definition)
         {
+            LoadShapeDefinitionToEditor(definition);
+        }
+
+        private void LoadShapeDefinitionToEditor(ShapeDefinition definition)
+        {
             isLoadingSymbolDefinition = true;
             try
             {
                 txtShapeId.Text = definition.Id;
                 cmbShapeType.SelectedIndex = definition.Type == "Line" ? 0 : definition.Type == "Rectangle" ? 1 : 2;
                 chkLineGroupTarget.IsChecked = definition.IsLineGroupTarget;
+                cmbShapeLineGroupDataDefinition.SelectedItem = viewModel.DataDefinitions
+                    .FirstOrDefault(item => item.Name == definition.LineGroupDataDefinitionName);
+                chkAutoCreateLineGroupData.IsChecked = definition.AutoCreateLineGroupData;
                 rbLineNormal.IsChecked = definition.LineRole == LineRoleType.Normal;
                 rbLineWireA.IsChecked = definition.LineRole == LineRoleType.WireA;
                 rbLineWireB.IsChecked = definition.LineRole == LineRoleType.WireB;
@@ -1872,21 +2506,106 @@ except Exception:
                 isLoadingSymbolDefinition = false;
             }
 
-            RightTabControl.SelectedIndex = 2;
+            RightTabControl.SelectedIndex = 4;
             RefreshEditor();
         }
 
         private void UpdateSymbolDefinitionFromEditor(ShapeDefinition definition)
         {
+            UpdateShapeDefinitionFromEditor(definition);
+        }
+
+        private void UpdateShapeDefinitionFromEditor(ShapeDefinition definition)
+        {
             definition.Id = txtShapeId.Text;
-            definition.Type = "Symbol";
+            definition.Type = GetSelectedShapeType();
             definition.FixedSize = GetSymbolFixedWidth();
             definition.FixedHeight = GetSymbolFixedHeight();
             definition.GridWidthCount = GetSymbolGridWidthCount();
             definition.GridHeightCount = GetSymbolGridHeightCount();
-            definition.ConnectionPoints = new List<Point>(viewModel.TempConnectionPoints);
-            definition.VectorElements = viewModel.TempVectorElements.Select(CloneVectorElement).ToList();
-            definition.LineRole = LineRoleType.Normal;
+            definition.LineRole = definition.Type == "Line" ? GetSelectedLineRole() : LineRoleType.Normal;
+            definition.IsLineGroupTarget = IsSelectedLineGroupTarget();
+            definition.LineGroupDataDefinitionName = GetSelectedLineGroupDataDefinitionName();
+            definition.AutoCreateLineGroupData = IsSelectedAutoCreateLineGroupData();
+
+            if (definition.Type == "Symbol")
+            {
+                definition.ConnectionPoints = new List<Point>(viewModel.TempConnectionPoints);
+                definition.VectorElements = viewModel.TempVectorElements.Select(CloneVectorElement).ToList();
+            }
+            else
+            {
+                definition.ConnectionPoints.Clear();
+                definition.VectorElements.Clear();
+            }
+        }
+
+        private bool HasPlacedElementsForDefinition(ShapeDefinition definition)
+        {
+            return DrawCanvas.Children
+                .OfType<FrameworkElement>()
+                .Any(element => ReferenceEquals(element.Tag, definition));
+        }
+
+        private void RefreshShapeDefinitionLists(ShapeDefinition selectedDefinition)
+        {
+            if (selectedDefinition.Type == "Symbol")
+            {
+                if (!viewModel.RegisteredSymbols.Contains(selectedDefinition))
+                {
+                    viewModel.RegisteredSymbols.Add(selectedDefinition);
+                }
+            }
+            else
+            {
+                viewModel.RegisteredSymbols.Remove(selectedDefinition);
+            }
+
+            viewModel.SelectedShape = selectedDefinition;
+            viewModel.SelectedRegisteredSymbol = selectedDefinition.Type == "Symbol"
+                ? selectedDefinition
+                : viewModel.RegisteredSymbols.FirstOrDefault();
+            lstShapes.Items.Refresh();
+            lstRegisteredSymbols.Items.Refresh();
+        }
+
+        private void RebuildPlacedElementsForDefinition(ShapeDefinition definition)
+        {
+            foreach (UIElement element in DrawCanvas.Children)
+            {
+                if (element is not FrameworkElement frameworkElement ||
+                    !ReferenceEquals(frameworkElement.Tag, definition))
+                {
+                    continue;
+                }
+
+                if (element is Canvas symbol && definition.Type == "Symbol")
+                {
+                    symbol.Width = definition.FixedSize;
+                    symbol.Height = definition.FixedHeight > 0 ? definition.FixedHeight : definition.FixedSize;
+                    PopulateSymbolCanvas(symbol, definition, symbol.Width, symbol.Height);
+                    UpdateConnectedLines(symbol);
+                }
+                else if (element is Line line && definition.Type == "Line")
+                {
+                    ApplyLineDefinitionStyle(line, definition);
+                    UpdateConnectedLines(line);
+                }
+                else if (element is Rectangle rectangle && definition.Type == "Rectangle")
+                {
+                    rectangle.MinWidth = GridSize;
+                    rectangle.MinHeight = GridSize;
+                }
+            }
+        }
+
+        private void ApplyLineDefinitionStyle(Line line, ShapeDefinition definition)
+        {
+            var style = GetLineBaseStyle(definition);
+            line.Stroke = style.Brush;
+            line.StrokeThickness = style.Thickness;
+            line.StrokeStartLineCap = PenLineCap.Round;
+            line.StrokeEndLineCap = PenLineCap.Round;
         }
 
         private SymbolVectorElement CloneVectorElement(SymbolVectorElement element)
@@ -2052,6 +2771,7 @@ except Exception:
             WriteCsvFile(GetCsvPath(directory, baseName, "placed_items"), CreatePlacedItemCsvRows(saveData));
             WriteCsvFile(GetCsvPath(directory, baseName, "line_groups"), CreateLineGroupCsvRows(saveData));
             WriteCsvFile(GetCsvPath(directory, baseName, "connection_nodes"), CreateConnectionNodeCsvRows(saveData));
+            WriteCsvFile(GetCsvPath(directory, baseName, "data_links"), CreateDataLinkCsvRows(saveData));
 
             foreach (var definition in saveData.DataDefinitions)
             {
@@ -2138,7 +2858,8 @@ except Exception:
                 ["shape_vector_elements"] = GetCsvHeader(CreateShapeVectorElementCsvRows(saveData)),
                 ["placed_items"] = GetCsvHeader(CreatePlacedItemCsvRows(saveData)),
                 ["line_groups"] = GetCsvHeader(CreateLineGroupCsvRows(saveData)),
-                ["connection_nodes"] = GetCsvHeader(CreateConnectionNodeCsvRows(saveData))
+                ["connection_nodes"] = GetCsvHeader(CreateConnectionNodeCsvRows(saveData)),
+                ["data_links"] = GetCsvHeader(CreateDataLinkCsvRows(saveData))
             };
 
             foreach (var definition in saveData.DataDefinitions)
@@ -2167,7 +2888,8 @@ except Exception:
                 ["shape_vector_elements"] = GetCsvBody(CreateShapeVectorElementCsvRows(saveData)),
                 ["placed_items"] = GetCsvBody(CreatePlacedItemCsvRows(saveData)),
                 ["line_groups"] = GetCsvBody(CreateLineGroupCsvRows(saveData)),
-                ["connection_nodes"] = GetCsvBody(CreateConnectionNodeCsvRows(saveData))
+                ["connection_nodes"] = GetCsvBody(CreateConnectionNodeCsvRows(saveData)),
+                ["data_links"] = GetCsvBody(CreateDataLinkCsvRows(saveData))
             };
 
             foreach (var definition in saveData.DataDefinitions)
@@ -2254,7 +2976,7 @@ except Exception:
 
         private IEnumerable<IEnumerable<string>> CreateDataDefinitionCsvRows(DrawingSaveData saveData)
         {
-            yield return new[] { "DefinitionName", "ParentDefinitionName", "IdItemName", "UsePythonIdGenerator", "PythonIdGeneratorCode", "ItemOrder", "ItemName", "ReferenceDefinitionName" };
+            yield return new[] { "DefinitionName", "ParentDefinitionName", "IdItemName", "UsePythonIdGenerator", "PythonIdGeneratorCode", "ItemOrder", "ItemName", "ReferenceDefinitionName", "UsePythonValueGenerator", "PythonValueGeneratorCode" };
             foreach (var definition in saveData.DataDefinitions)
             {
                 var itemDefinitions = GetSavedDataDefinitionOwnItems(definition);
@@ -2267,6 +2989,8 @@ except Exception:
                         definition.IdItemName,
                         definition.UsePythonIdGenerator ? "true" : "false",
                         definition.PythonIdGeneratorCode,
+                        "",
+                        "",
                         "",
                         "",
                         ""
@@ -2286,7 +3010,9 @@ except Exception:
                         definition.PythonIdGeneratorCode,
                         (i + 1).ToString(CultureInfo.InvariantCulture),
                         item.Name,
-                        item.ReferenceDefinitionName
+                        item.ReferenceDefinitionName,
+                        item.UsePythonValueGenerator ? "true" : "false",
+                        item.PythonValueGeneratorCode
                     };
                 }
             }
@@ -2327,7 +3053,7 @@ except Exception:
 
         private IEnumerable<IEnumerable<string>> CreateShapeDefinitionCsvRows(DrawingSaveData saveData)
         {
-            yield return new[] { "DefinitionId", "Type", "LineRole", "IsLineGroupTarget", "GridWidthCount", "GridHeightCount", "FixedSize", "FixedHeight" };
+            yield return new[] { "DefinitionId", "Type", "LineRole", "IsLineGroupTarget", "LineGroupDataDefinitionName", "AutoCreateLineGroupData", "GridWidthCount", "GridHeightCount", "FixedSize", "FixedHeight" };
             foreach (var definition in saveData.ShapeDefinitions)
             {
                 yield return new[]
@@ -2336,6 +3062,8 @@ except Exception:
                     definition.Type,
                     definition.LineRole,
                     definition.IsLineGroupTarget ? "true" : "false",
+                    definition.LineGroupDataDefinitionName,
+                    definition.AutoCreateLineGroupData ? "true" : "false",
                     definition.GridWidthCount.ToString(CultureInfo.InvariantCulture),
                     definition.GridHeightCount.ToString(CultureInfo.InvariantCulture),
                     CsvNumber(definition.FixedSize),
@@ -2615,6 +3343,196 @@ except Exception:
             }
         }
 
+        private IEnumerable<IEnumerable<string>> CreateDataLinkCsvRows(DrawingSaveData saveData)
+        {
+            yield return new[]
+            {
+                "LinkNo",
+                "ConnectionKind",
+                "FromItemNo",
+                "FromDefinitionId",
+                "FromType",
+                "FromDataDefinitionName",
+                "FromDataId",
+                "ToItemNo",
+                "ToDefinitionId",
+                "ToType",
+                "ToDataDefinitionName",
+                "ToDataId"
+            };
+
+            var links = BuildDataLinks(saveData)
+                .OrderBy(link => link.From.ItemNo)
+                .ThenBy(link => link.To.ItemNo)
+                .ThenBy(link => link.Kind)
+                .ToList();
+
+            for (int i = 0; i < links.Count; i++)
+            {
+                var link = links[i];
+                yield return new[]
+                {
+                    (i + 1).ToString(CultureInfo.InvariantCulture),
+                    link.Kind,
+                    link.From.ItemNo.ToString(CultureInfo.InvariantCulture),
+                    link.From.DefinitionId,
+                    link.From.Type,
+                    link.From.DataDefinitionName,
+                    link.From.DataId,
+                    link.To.ItemNo.ToString(CultureInfo.InvariantCulture),
+                    link.To.DefinitionId,
+                    link.To.Type,
+                    link.To.DataDefinitionName,
+                    link.To.DataId
+                };
+            }
+        }
+
+        private List<(string Kind, SavedDrawingItem From, SavedDrawingItem To)> BuildDataLinks(DrawingSaveData saveData)
+        {
+            var itemsByNo = saveData.Items.ToDictionary(item => item.ItemNo);
+            var groupByItemNo = CreateLineGroupDataItemMap(saveData, itemsByNo);
+            var result = new List<(string Kind, SavedDrawingItem From, SavedDrawingItem To)>();
+            var emittedKeys = new HashSet<string>();
+
+            void AddLink(int fromItemNo, int toItemNo, string kind)
+            {
+                if (!itemsByNo.TryGetValue(fromItemNo, out var fromItem) ||
+                    !itemsByNo.TryGetValue(toItemNo, out var toItem))
+                {
+                    return;
+                }
+
+                var fromDataItem = GetDataLinkItem(fromItem, groupByItemNo);
+                var toDataItem = GetDataLinkItem(toItem, groupByItemNo);
+                if (!HasDataReference(fromDataItem) ||
+                    !HasDataReference(toDataItem) ||
+                    IsSameDataReference(fromDataItem, toDataItem))
+                {
+                    return;
+                }
+
+                var ordered = OrderDataLinkItems(fromDataItem, toDataItem);
+                string key = $"{ordered.From.DataDefinitionName}:{ordered.From.DataId}|{ordered.To.DataDefinitionName}:{ordered.To.DataId}|{kind}";
+                if (!emittedKeys.Add(key))
+                {
+                    return;
+                }
+
+                result.Add((kind, ordered.From, ordered.To));
+            }
+
+            foreach (var item in saveData.Items.Where(item => item.Type == "Line"))
+            {
+                if (item.StartConnection != null)
+                {
+                    AddLink(item.ItemNo, item.StartConnection.TargetItemNo, CreateDataLinkKind(item.StartConnection));
+                }
+
+                if (item.EndConnection != null)
+                {
+                    AddLink(item.ItemNo, item.EndConnection.TargetItemNo, CreateDataLinkKind(item.EndConnection));
+                }
+            }
+
+            foreach (var node in saveData.ConnectionNodes)
+            {
+                var itemNos = node.Endpoints
+                    .Select(endpoint => endpoint.ItemNo)
+                    .Distinct()
+                    .OrderBy(itemNo => itemNo)
+                    .ToList();
+                for (int i = 0; i < itemNos.Count; i++)
+                {
+                    for (int j = i + 1; j < itemNos.Count; j++)
+                    {
+                        AddLink(itemNos[i], itemNos[j], "ConnectionNode");
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private Dictionary<int, SavedDrawingItem> CreateLineGroupDataItemMap(
+            DrawingSaveData saveData,
+            Dictionary<int, SavedDrawingItem> itemsByNo)
+        {
+            var result = new Dictionary<int, SavedDrawingItem>();
+            foreach (var group in saveData.LineGroups)
+            {
+                if (string.IsNullOrWhiteSpace(group.DataDefinitionName) ||
+                    string.IsNullOrWhiteSpace(group.DataId))
+                {
+                    continue;
+                }
+
+                int representative = group.ItemNos
+                    .Where(itemsByNo.ContainsKey)
+                    .DefaultIfEmpty(group.ItemNos.FirstOrDefault())
+                    .Min();
+                var dataItem = new SavedDrawingItem
+                {
+                    ItemNo = representative,
+                    DefinitionId = group.DefinitionId,
+                    Type = "LineGroup",
+                    DataDefinitionName = group.DataDefinitionName,
+                    DataId = group.DataId
+                };
+
+                foreach (var itemNo in group.ItemNos)
+                {
+                    result[itemNo] = dataItem;
+                }
+            }
+
+            return result;
+        }
+
+        private SavedDrawingItem GetDataLinkItem(
+            SavedDrawingItem item,
+            Dictionary<int, SavedDrawingItem> groupByItemNo)
+        {
+            return item.Type == "Line" && groupByItemNo.TryGetValue(item.ItemNo, out var groupItem)
+                ? groupItem
+                : item;
+        }
+
+        private bool HasDataReference(SavedDrawingItem item)
+        {
+            return !string.IsNullOrWhiteSpace(item.DataDefinitionName) &&
+                   !string.IsNullOrWhiteSpace(item.DataId);
+        }
+
+        private bool IsSameDataReference(SavedDrawingItem first, SavedDrawingItem second)
+        {
+            return first.DataDefinitionName == second.DataDefinitionName &&
+                   first.DataId == second.DataId;
+        }
+
+        private (SavedDrawingItem From, SavedDrawingItem To) OrderDataLinkItems(
+            SavedDrawingItem first,
+            SavedDrawingItem second)
+        {
+            int compare = string.Compare(first.DataDefinitionName, second.DataDefinitionName, StringComparison.Ordinal);
+            if (compare == 0)
+            {
+                compare = string.Compare(first.DataId, second.DataId, StringComparison.Ordinal);
+            }
+
+            if (compare == 0)
+            {
+                compare = first.ItemNo.CompareTo(second.ItemNo);
+            }
+
+            return compare <= 0 ? (first, second) : (second, first);
+        }
+
+        private string CreateDataLinkKind(SavedLineEndpointConnection connection)
+        {
+            return connection.TargetKind == "Line" ? "LineToLine" : "LineToSymbol";
+        }
+
         private void BtnOpen_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new OpenFileDialog
@@ -2723,6 +3641,8 @@ except Exception:
                 GridHeightCount = gridHeightCount,
                 LineRole = lineRole,
                 IsLineGroupTarget = savedDefinition.IsLineGroupTarget,
+                LineGroupDataDefinitionName = savedDefinition.LineGroupDataDefinitionName,
+                AutoCreateLineGroupData = savedDefinition.AutoCreateLineGroupData,
                 ConnectionPoints = savedDefinition.ConnectionPoints
                     .Select(point => new Point(point.X, point.Y))
                     .ToList(),
@@ -2754,7 +3674,9 @@ except Exception:
                 definition.ItemDefinitions.Add(new DataDefinitionItem
                 {
                     Name = item.Name,
-                    ReferenceDefinitionName = item.ReferenceDefinitionName
+                    ReferenceDefinitionName = item.ReferenceDefinitionName,
+                    UsePythonValueGenerator = item.UsePythonValueGenerator,
+                    PythonValueGeneratorCode = item.PythonValueGeneratorCode
                 });
             }
             if (definition.ItemDefinitions.Count == 0)
@@ -2955,6 +3877,49 @@ except Exception:
             }
         }
 
+        private void ApplyDataVisualStateToAllDrawingElements()
+        {
+            foreach (UIElement element in DrawCanvas.Children)
+            {
+                if (IsSavedDrawingElement(element))
+                {
+                    ApplyDataVisualState(element);
+                }
+            }
+        }
+
+        private void ApplyDataVisualState(UIElement element)
+        {
+            bool hasData = GetDrawingElementDataRecord(element) != null;
+
+            if (element is Canvas symbol)
+            {
+                var background = symbol.Children.OfType<Rectangle>().FirstOrDefault();
+                if (background != null)
+                {
+                    background.Fill = hasData
+                        ? new SolidColorBrush(Color.FromRgb(198, 239, 206))
+                        : Brushes.Orange;
+                }
+                return;
+            }
+
+            if (element is Rectangle rectangle)
+            {
+                rectangle.Fill = hasData
+                    ? new SolidColorBrush(Color.FromArgb(140, 198, 239, 206))
+                    : new SolidColorBrush(Color.FromArgb(100, 173, 216, 230));
+                return;
+            }
+
+            if (element is Line line && line.Tag is ShapeDefinition definition)
+            {
+                var style = GetLineBaseStyle(definition);
+                line.Stroke = hasData ? Brushes.ForestGreen : style.Brush;
+                line.StrokeThickness = hasData ? style.Thickness + 2 : style.Thickness;
+            }
+        }
+
         private void RebuildPlacedSymbolsForDefinition(ShapeDefinition definition)
         {
             foreach (UIElement element in DrawCanvas.Children)
@@ -3089,6 +4054,8 @@ except Exception:
                     GridHeightCount = definition.GridHeightCount,
                     LineRole = definition.LineRole.ToString(),
                     IsLineGroupTarget = definition.IsLineGroupTarget,
+                    LineGroupDataDefinitionName = definition.LineGroupDataDefinitionName,
+                    AutoCreateLineGroupData = definition.AutoCreateLineGroupData,
                     ConnectionPoints = definition.ConnectionPoints
                         .Select(point => new SavedPoint { X = point.X, Y = point.Y })
                         .ToList(),
@@ -3115,7 +4082,9 @@ except Exception:
                         .Select(item => new SavedDataDefinitionItem
                         {
                             Name = item.Name,
-                            ReferenceDefinitionName = item.ReferenceDefinitionName
+                            ReferenceDefinitionName = item.ReferenceDefinitionName,
+                            UsePythonValueGenerator = item.UsePythonValueGenerator,
+                            PythonValueGeneratorCode = item.PythonValueGeneratorCode
                         })
                         .ToList()
                 });
@@ -3918,6 +4887,7 @@ except Exception:
                     currentElement = (parent != null && parent.Tag is ShapeDefinition) ? (UIElement)parent : (UIElement)shape;
                     isDrawingOrMoving = true;
                     ShowSelectionHighlight(currentElement);
+                    SelectPlacedSymbolListItem(currentElement);
                     if (currentElement is Shape s && s.Tag is ShapeDefinition d) ShowResizeHandles(s, d);
                     else if (currentElement is Canvas c && c.Tag is ShapeDefinition cd) ShowResizeHandles(c, cd);
                 } else if (e.OriginalSource == DrawCanvas) {
@@ -3927,6 +4897,7 @@ except Exception:
                         currentElement = nearbyLine;
                         isDrawingOrMoving = true;
                         ShowSelectionHighlight(currentElement);
+                        SelectPlacedSymbolListItem(currentElement);
                         ShowResizeHandles(nearbyLine, nearbyDef);
                     }
                     else
@@ -3934,6 +4905,7 @@ except Exception:
                         currentElement = null;
                         HideAllHandles();
                         HideSelectionHighlight();
+                        lstPlacedSymbols.SelectedItem = null;
                     }
                 }
             }
@@ -4136,10 +5108,19 @@ except Exception:
         {
             selectionBox.Visibility = Visibility.Collapsed;
             selectionLineHighlight.Visibility = Visibility.Collapsed;
+            foreach (var highlight in selectionLineGroupHighlights)
+            {
+                highlight.Visibility = Visibility.Collapsed;
+            }
         }
 
         private void UpdateSelectionHighlight(UIElement element)
         {
+            foreach (var highlight in selectionLineGroupHighlights)
+            {
+                highlight.Visibility = Visibility.Collapsed;
+            }
+
             if (element is Line line)
             {
                 selectionBox.Visibility = Visibility.Collapsed;
@@ -4174,6 +5155,59 @@ except Exception:
             }
 
             HideSelectionHighlight();
+        }
+
+        private void ShowLineGroupSelectionHighlight(string lineGroupKey)
+        {
+            selectionBox.Visibility = Visibility.Collapsed;
+            selectionLineHighlight.Visibility = Visibility.Collapsed;
+
+            var lines = GetLinesForLineGroupKey(lineGroupKey);
+            if (lines.Count == 0)
+            {
+                foreach (var highlight in selectionLineGroupHighlights)
+                {
+                    highlight.Visibility = Visibility.Collapsed;
+                }
+                return;
+            }
+
+            EnsureLineGroupHighlightCount(lines.Count);
+            for (int i = 0; i < selectionLineGroupHighlights.Count; i++)
+            {
+                var highlight = selectionLineGroupHighlights[i];
+                if (i >= lines.Count)
+                {
+                    highlight.Visibility = Visibility.Collapsed;
+                    continue;
+                }
+
+                var line = lines[i];
+                highlight.X1 = line.X1;
+                highlight.Y1 = line.Y1;
+                highlight.X2 = line.X2;
+                highlight.Y2 = line.Y2;
+                highlight.Visibility = Visibility.Visible;
+            }
+        }
+
+        private void EnsureLineGroupHighlightCount(int count)
+        {
+            while (selectionLineGroupHighlights.Count < count)
+            {
+                var highlight = new Line
+                {
+                    Stroke = Brushes.Gold,
+                    StrokeThickness = 8,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Round,
+                    Opacity = 0.45,
+                    Visibility = Visibility.Collapsed,
+                    IsHitTestVisible = false
+                };
+                selectionLineGroupHighlights.Add(highlight);
+                DrawCanvas.Children.Add(highlight);
+            }
         }
 
         private void InitializeHandles() { rectResizeHandle = CreateHandle(Brushes.Red, Cursors.SizeNWSE); lineStartHandle = CreateHandle(Brushes.Green, Cursors.Cross); lineEndHandle = CreateHandle(Brushes.Green, Cursors.Cross); }

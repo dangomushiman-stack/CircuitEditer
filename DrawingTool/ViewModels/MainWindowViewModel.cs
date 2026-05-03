@@ -58,7 +58,17 @@ namespace DrawingTool.ViewModels
             RegisteredShapes.Add(new ShapeDefinition { Id = "RECT-01", Type = "Rectangle" });
         }
 
-        public ShapeDefinition RegisterShape(string id, string type, double fixedSize, double fixedHeight, int gridWidthCount, int gridHeightCount, LineRoleType lineRole, bool isLineGroupTarget)
+        public ShapeDefinition RegisterShape(
+            string id,
+            string type,
+            double fixedSize,
+            double fixedHeight,
+            int gridWidthCount,
+            int gridHeightCount,
+            LineRoleType lineRole,
+            bool isLineGroupTarget,
+            string lineGroupDataDefinitionName,
+            bool autoCreateLineGroupData)
         {
             var definition = new ShapeDefinition
             {
@@ -87,7 +97,9 @@ namespace DrawingTool.ViewModels
                     })
                     .ToList(),
                 LineRole = lineRole,
-                IsLineGroupTarget = isLineGroupTarget
+                IsLineGroupTarget = isLineGroupTarget,
+                LineGroupDataDefinitionName = lineGroupDataDefinitionName,
+                AutoCreateLineGroupData = autoCreateLineGroupData
             };
 
             RegisteredShapes.Add(definition);
@@ -173,7 +185,9 @@ namespace DrawingTool.ViewModels
                 definition.ItemDefinitions.Add(new DataDefinitionItem
                 {
                     Name = item.Name,
-                    ReferenceDefinitionName = item.ReferenceDefinitionName
+                    ReferenceDefinitionName = item.ReferenceDefinitionName,
+                    UsePythonValueGenerator = item.UsePythonValueGenerator,
+                    PythonValueGeneratorCode = item.PythonValueGeneratorCode
                 });
             }
 

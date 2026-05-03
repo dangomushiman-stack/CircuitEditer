@@ -135,6 +135,10 @@
                                 Click="BtnAssignDataRecordToLineGroup_Click"
                                 Padding="6,2"
                                 Margin="0,0,0,5"/>
+                        <Button Content="線グループデータを自動作成"
+                                Click="BtnAutoCreateLineGroupData_Click"
+                                Padding="6,2"
+                                Margin="0,0,0,5"/>
                         <TextBlock Text="割付済み対応情報:" Margin="0,0,0,2"/>
                         <TextBox Name="txtLineGroupAttributes"
                                  Height="90"
@@ -208,6 +212,15 @@
                             <RadioButton Name="rbLineWireC" Content="接続線C (線に結合して相手線を分割)" Foreground="DarkCyan" Margin="10,2,5,2"/>
                             <RadioButton Name="rbLineBus" Content="バス (中途への接続を受け入れる)" Foreground="Purple" Margin="10,2,5,5"/>
                             <CheckBox Name="chkLineGroupTarget" Content="同種接続線のグループ化対象にする" Margin="10,6,5,5"/>
+                            <TextBlock Text="線グループ用データ定義:" Margin="10,6,5,2"/>
+                            <ComboBox Name="cmbShapeLineGroupDataDefinition"
+                                      ItemsSource="{Binding DataDefinitions}"
+                                      DisplayMemberPath="DisplayText"
+                                      Margin="10,0,5,4"
+                                      Padding="2"/>
+                            <CheckBox Name="chkAutoCreateLineGroupData"
+                                      Content="線グループができた瞬間にデータを自動作成する"
+                                      Margin="10,2,5,5"/>
                         </StackPanel>
 
                         <StackPanel Name="SymbolSettings" Visibility="Collapsed">
@@ -240,13 +253,13 @@
                                         MouseLeftButtonUp="EditorCanvas_MouseLeftButtonUp"/>
                             </Border>
                             <TextBlock Text="※接続点: クリックで追加/削除。ベクター: ドラッグで線・四角・楕円を描画。" FontSize="10" Margin="0,5,0,15" Foreground="Gray" TextWrapping="Wrap"/>
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                <Button Content="選択シンボルを読み込み" Click="BtnLoadSelectedSymbol_Click" Padding="6,2"/>
-                                <Button Content="選択シンボルを更新" Click="BtnUpdateSelectedSymbol_Click" Padding="6,2" Margin="5,0,0,0"/>
-                            </StackPanel>
                         </StackPanel>
 
-                        <Button Content="この図形をマスターに登録" Click="BtnRegisterShape_Click" Padding="8" Background="#E0F0FF"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                            <Button Content="この図形をマスターに登録" Click="BtnRegisterShape_Click" Padding="8" Background="#E0F0FF"/>
+                            <Button Content="選択図形を読み込み" Click="BtnLoadSelectedShapeDefinition_Click" Padding="8" Margin="5,0,0,0"/>
+                            <Button Content="選択図形を更新" Click="BtnUpdateSelectedShapeDefinition_Click" Padding="8" Margin="5,0,0,0"/>
+                        </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -284,6 +297,21 @@
                                       Padding="2"/>
                             <Button Content="参照なし" Click="BtnClearDataItemReferenceDefinition_Click" Padding="6,2" Margin="5,0,0,0"/>
                         </StackPanel>
+                        <CheckBox Name="chkUsePythonValueGenerator"
+                                  Content="この項目をPythonで自動設定する"
+                                  Margin="0,0,0,4"/>
+                        <TextBlock Text="項目Pythonコード: generate_value(input, tables, context) を定義してください。戻り値は文字列または {'value': '...'} です。"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,2"/>
+                        <TextBox Name="txtPythonValueGeneratorCode"
+                                 Height="90"
+                                 AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 TextWrapping="NoWrap"
+                                 FontFamily="Consolas"
+                                 Margin="0,0,0,8"
+                                 Padding="2"/>
 
                         <ListBox Name="lstTempDataItems"
                                  Height="100"
@@ -354,6 +382,7 @@
                             <Button Content="定義項目から値欄を作成" Click="BtnCreateRecordFields_Click" Padding="6,2"/>
                             <Button Content="PythonでID採番" Click="BtnGenerateDataRecordId_Click" Padding="6,2" Margin="5,0,0,0"/>
                         </StackPanel>
+                        <Button Content="Pythonで項目自動設定" Click="BtnGenerateDataRecordValues_Click" Padding="6,2" Margin="0,0,0,5"/>
                         <ScrollViewer Height="140"
                                       VerticalScrollBarVisibility="Auto"
                                       Margin="0,0,0,5">

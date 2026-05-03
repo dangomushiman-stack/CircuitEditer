@@ -28,6 +28,8 @@ namespace DrawingTool.Models
     {
         public string Name { get; set; } = "";
         public string ReferenceDefinitionName { get; set; } = "";
+        public bool UsePythonValueGenerator { get; set; }
+        public string PythonValueGeneratorCode { get; set; } = "";
     }
 
     public class SavedDataRecord
@@ -47,6 +49,8 @@ namespace DrawingTool.Models
         public int GridHeightCount { get; set; }
         public string LineRole { get; set; } = "";
         public bool IsLineGroupTarget { get; set; }
+        public string LineGroupDataDefinitionName { get; set; } = "";
+        public bool AutoCreateLineGroupData { get; set; }
         public List<SavedPoint> ConnectionPoints { get; set; } = new List<SavedPoint>();
         public List<SavedSymbolVectorElement> VectorElements { get; set; } = new List<SavedSymbolVectorElement>();
         public List<SavedSymbolAttribute> Attributes { get; set; } = new List<SavedSymbolAttribute>();
