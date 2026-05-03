@@ -15,6 +15,7 @@ namespace DrawingTool.ViewModels
         public ObservableCollection<DataDefinition> DataDefinitions { get; } = new ObservableCollection<DataDefinition>();
         public ObservableCollection<DataRecord> DataRecords { get; } = new ObservableCollection<DataRecord>();
         public List<Point> TempConnectionPoints { get; } = new List<Point>();
+        public List<string> TempConnectionPointIds { get; } = new List<string>();
         public List<SymbolVectorElement> TempVectorElements { get; } = new List<SymbolVectorElement>();
         public List<SymbolAttribute> TempAttributes { get; } = new List<SymbolAttribute>();
         public ObservableCollection<DataDefinitionItem> TempDataItems { get; } = new ObservableCollection<DataDefinitionItem>();
@@ -79,6 +80,7 @@ namespace DrawingTool.ViewModels
                 GridWidthCount = gridWidthCount,
                 GridHeightCount = gridHeightCount,
                 ConnectionPoints = new List<Point>(TempConnectionPoints),
+                ConnectionPointIds = TempConnectionPointIds.ToList(),
                 VectorElements = TempVectorElements
                     .Select(element => new SymbolVectorElement
                     {
@@ -116,6 +118,7 @@ namespace DrawingTool.ViewModels
         public void ClearTempConnectionPoints()
         {
             TempConnectionPoints.Clear();
+            TempConnectionPointIds.Clear();
         }
 
         public void ClearTempVectorElements()

@@ -13,6 +13,7 @@ namespace DrawingTool.Models
         public int GridWidthCount { get; set; } = 3;
         public int GridHeightCount { get; set; } = 3;
         public List<Point> ConnectionPoints { get; set; } = new List<Point>();
+        public List<string> ConnectionPointIds { get; set; } = new List<string>();
         public List<SymbolVectorElement> VectorElements { get; set; } = new List<SymbolVectorElement>();
         public List<SymbolAttribute> Attributes { get; set; } = new List<SymbolAttribute>();
 

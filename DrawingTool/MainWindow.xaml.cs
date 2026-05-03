@@ -33,7 +33,25 @@ namespace DrawingTool
             public string DataId { get; set; } = "";
         }
 
+        private class SignalEdge
+        {
+            public int FromItemNo { get; set; }
+            public int ToItemNo { get; set; }
+            public string FromPortId { get; set; } = "";
+            public string ToPortId { get; set; } = "";
+            public string Kind { get; set; } = "";
+        }
+
+        private class SignalHandlerResult
+        {
+            public bool HasHandler { get; set; }
+            public bool ContinueSignal { get; set; } = true;
+            public HashSet<string> OutPorts { get; } = new HashSet<string>();
+            public List<string> Messages { get; } = new List<string>();
+        }
+
         private readonly MainWindowViewModel viewModel = new MainWindowViewModel();
+        private readonly List<SavedSignalSettings> savedSignalSettings = new List<SavedSignalSettings>();
         private Dictionary<Line, LineConnectionInfo> lineConnections = new Dictionary<Line, LineConnectionInfo>();
         private Dictionary<Line, ConnectionNode> lineStartNodes = new Dictionary<Line, ConnectionNode>();
         private Dictionary<Line, ConnectionNode> lineEndNodes = new Dictionary<Line, ConnectionNode>();
@@ -139,6 +157,7 @@ namespace DrawingTool
         {
             InitializeComponent();
             DataContext = viewModel;
+            lstSavedSignals.ItemsSource = savedSignalSettings;
             InitializeSelectionHighlight();
             InitializeHandles();
             RefreshEditor();
@@ -156,7 +175,19 @@ namespace DrawingTool
             for (double x = 0; x <= width; x += GridSize) { for (double y = 0; y <= height; y += GridSize) { var dot = new Ellipse { Width = 4, Height = 4, Fill = Brushes.LightGray }; Canvas.SetLeft(dot, x + 10 - 2); Canvas.SetTop(dot, y + 10 - 2); EditorCanvas.Children.Add(dot); } }
             foreach (var vectorElement in viewModel.TempVectorElements) { AddVectorElementToCanvas(EditorCanvas, vectorElement, 10, Brushes.Black, 2, 1); }
             if (editorVectorPreview != null) { AddVectorElementToCanvas(EditorCanvas, editorVectorPreview, 10, Brushes.DarkGreen, 2, 0.65); }
-            foreach (var p in viewModel.TempConnectionPoints) { var connDot = new Ellipse { Width = 8, Height = 8, Fill = Brushes.Blue, Stroke = Brushes.White, StrokeThickness = 1 }; Canvas.SetLeft(connDot, p.X + 10 - 4); Canvas.SetTop(connDot, p.Y + 10 - 4); EditorCanvas.Children.Add(connDot); }
+            for (int i = 0; i < viewModel.TempConnectionPoints.Count; i++)
+            {
+                var p = viewModel.TempConnectionPoints[i];
+                var portId = GetTempConnectionPointId(i);
+                var connDot = new Ellipse { Width = 8, Height = 8, Fill = Brushes.Blue, Stroke = Brushes.White, StrokeThickness = 1, ToolTip = portId };
+                Canvas.SetLeft(connDot, p.X + 10 - 4);
+                Canvas.SetTop(connDot, p.Y + 10 - 4);
+                EditorCanvas.Children.Add(connDot);
+                var label = new TextBlock { Text = portId, FontSize = 10, Foreground = Brushes.DarkBlue, IsHitTestVisible = false };
+                Canvas.SetLeft(label, p.X + 16);
+                Canvas.SetTop(label, p.Y + 6);
+                EditorCanvas.Children.Add(label);
+            }
         }
 
         private void RefreshPlacedSymbols()
@@ -299,8 +330,72 @@ namespace DrawingTool
                 return;
             }
 
-            if (viewModel.TempConnectionPoints.Any(pt => pt == newPoint)) viewModel.TempConnectionPoints.Remove(newPoint); else viewModel.TempConnectionPoints.Add(newPoint);
+            int existingIndex = viewModel.TempConnectionPoints.FindIndex(pt => pt == newPoint);
+            if (existingIndex >= 0)
+            {
+                viewModel.TempConnectionPoints.RemoveAt(existingIndex);
+                if (existingIndex < viewModel.TempConnectionPointIds.Count)
+                {
+                    viewModel.TempConnectionPointIds.RemoveAt(existingIndex);
+                }
+            }
+            else
+            {
+                string portId = GetNextPortIdInput();
+                viewModel.TempConnectionPoints.Add(newPoint);
+                viewModel.TempConnectionPointIds.Add(portId);
+                txtNextPortId.Text = GetNextAvailablePortId();
+            }
             RefreshEditor();
+        }
+
+        private string GetTempConnectionPointId(int index)
+        {
+            if (index >= 0 &&
+                index < viewModel.TempConnectionPointIds.Count &&
+                !string.IsNullOrWhiteSpace(viewModel.TempConnectionPointIds[index]))
+            {
+                return viewModel.TempConnectionPointIds[index];
+            }
+
+            return $"P{index + 1}";
+        }
+
+        private string GetNextPortIdInput()
+        {
+            string portId = txtNextPortId.Text.Trim();
+            if (string.IsNullOrWhiteSpace(portId))
+            {
+                portId = GetNextAvailablePortId();
+            }
+
+            return portId;
+        }
+
+        private string GetNextAvailablePortId()
+        {
+            int no = 1;
+            string portId;
+            var used = new HashSet<string>(viewModel.TempConnectionPointIds.Where(id => !string.IsNullOrWhiteSpace(id)));
+            do
+            {
+                portId = $"P{no++}";
+            }
+            while (used.Contains(portId));
+
+            return portId;
+        }
+
+        private string GetConnectionPointId(ShapeDefinition definition, int index)
+        {
+            if (index >= 0 &&
+                index < definition.ConnectionPointIds.Count &&
+                !string.IsNullOrWhiteSpace(definition.ConnectionPointIds[index]))
+            {
+                return definition.ConnectionPointIds[index];
+            }
+
+            return $"P{index + 1}";
         }
 
         private void EditorCanvas_MouseMove(object sender, MouseEventArgs e)
@@ -1760,7 +1855,524 @@ except Exception:
             {
                 lstPlacedSymbols.SelectedItem = placed;
                 lstPlacedSymbols.ScrollIntoView(placed);
+                cmbSignalStartItem.SelectedItem = placed;
+                RefreshSignalStartPortChoices();
             }
+        }
+
+        private void BtnRunSignalFromSelected_Click(object sender, RoutedEventArgs e)
+        {
+            if (currentElement == null)
+            {
+                MessageBox.Show(this, "キャンバス上で開始図形を選択してください。", "シグナル", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var placed = viewModel.PlacedSymbols
+                .FirstOrDefault(item => !item.IsLineGroup && ReferenceEquals(item.Element, currentElement));
+            if (placed == null)
+            {
+                MessageBox.Show(this, "選択中の図形が配置済み図形一覧に見つかりません。", "シグナル", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            cmbSignalStartItem.SelectedItem = placed;
+            RunSignalPropagation(placed);
+        }
+
+        private void CmbSignalStartItem_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            RefreshSignalStartPortChoices();
+        }
+
+        private void RefreshSignalStartPortChoices()
+        {
+            var selectedPort = cmbSignalStartPort.SelectedItem as string ?? cmbSignalStartPort.Text;
+            cmbSignalStartPort.ItemsSource = null;
+
+            if (cmbSignalStartItem.SelectedItem is not PlacedDrawingInfo placed ||
+                placed.Element is not FrameworkElement frameworkElement ||
+                frameworkElement.Tag is not ShapeDefinition definition ||
+                definition.Type != "Symbol")
+            {
+                cmbSignalStartPort.Text = "";
+                return;
+            }
+
+            var portIds = definition.ConnectionPoints
+                .Select((_, index) => GetConnectionPointId(definition, index))
+                .ToList();
+            cmbSignalStartPort.ItemsSource = portIds;
+            cmbSignalStartPort.SelectedItem = portIds.Contains(selectedPort) ? selectedPort : portIds.FirstOrDefault();
+        }
+
+        private void BtnRunSignalFromList_Click(object sender, RoutedEventArgs e)
+        {
+            if (cmbSignalStartItem.SelectedItem is not PlacedDrawingInfo placed || placed.IsLineGroup)
+            {
+                MessageBox.Show(this, "開始図形を選択してください。", "シグナル", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            RunSignalPropagation(placed);
+        }
+
+        private void BtnSaveSignalSettings_Click(object sender, RoutedEventArgs e)
+        {
+            var settings = CreateSavedSignalSettings();
+            if (string.IsNullOrWhiteSpace(settings.SignalName))
+            {
+                MessageBox.Show(this, "シグナル名を入力してください。", "シグナル", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            int existingIndex = savedSignalSettings.FindIndex(item => item.SignalName == settings.SignalName);
+            if (existingIndex >= 0)
+            {
+                savedSignalSettings[existingIndex] = settings;
+            }
+            else
+            {
+                savedSignalSettings.Add(settings);
+            }
+
+            lstSavedSignals.Items.Refresh();
+            lstSavedSignals.SelectedItem = settings;
+        }
+
+        private void BtnLoadSignalSettings_Click(object sender, RoutedEventArgs e)
+        {
+            if (lstSavedSignals.SelectedItem is not SavedSignalSettings settings)
+            {
+                MessageBox.Show(this, "シグナルリストから読み込むシグナルを選択してください。", "シグナル", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            LoadSignalSettings(settings);
+        }
+
+        private void BtnDeleteSignalSettings_Click(object sender, RoutedEventArgs e)
+        {
+            if (lstSavedSignals.SelectedItem is not SavedSignalSettings settings)
+            {
+                MessageBox.Show(this, "シグナルリストから削除するシグナルを選択してください。", "シグナル", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            savedSignalSettings.Remove(settings);
+            lstSavedSignals.Items.Refresh();
+        }
+
+        private void RunSignalPropagation(PlacedDrawingInfo startItem)
+        {
+            var saveData = CreateSaveData();
+            var itemsByNo = saveData.Items.ToDictionary(item => item.ItemNo);
+            if (!itemsByNo.ContainsKey(startItem.No))
+            {
+                txtSignalLog.Text = "開始図形が現在の図面データに見つかりません。";
+                return;
+            }
+
+            int maxSteps = GetSignalMaxSteps();
+            string signalName = string.IsNullOrWhiteSpace(txtSignalName.Text)
+                ? "signal"
+                : txtSignalName.Text.Trim();
+            bool allPorts = chkSignalAllPorts.IsChecked == true;
+            string startPortId = allPorts ? "" : cmbSignalStartPort.Text.Trim();
+            var edges = BuildSignalEdges(saveData)
+                .GroupBy(edge => edge.FromItemNo)
+                .ToDictionary(group => group.Key, group => group.OrderBy(edge => edge.ToItemNo).ToList());
+
+            var log = new StringBuilder();
+            var visited = new HashSet<int> { startItem.No };
+            var queuedMessages = new List<string>();
+            var queue = new Queue<(int ItemNo, int PreviousItemNo, int Depth, string StartPortId, string StartDataDefinition, string StartDataId, string FromPortId, string FromDataDefinition, string FromDataId, string InPortId)>();
+            var startSavedItem = itemsByNo[startItem.No];
+            string initialStartPortId = allPorts ? "ALL" : startPortId;
+            queue.Enqueue((startItem.No, 0, 0, initialStartPortId, startSavedItem.DataDefinitionName, startSavedItem.DataId, initialStartPortId, startSavedItem.DataDefinitionName, startSavedItem.DataId, ""));
+
+            log.AppendLine($"Signal: {signalName}");
+            log.AppendLine($"Start: {FormatSignalItem(startSavedItem)}");
+            log.AppendLine(allPorts ? "StartPort: ALL" : $"StartPort: {startPortId}");
+            log.AppendLine($"Signal.SourceData: {FormatSignalData(startSavedItem.DataDefinitionName, startSavedItem.DataId)}");
+            log.AppendLine($"MaxSteps: {maxSteps}");
+            log.AppendLine("");
+
+            while (queue.Count > 0)
+            {
+                var current = queue.Dequeue();
+                if (!itemsByNo.TryGetValue(current.ItemNo, out var item))
+                {
+                    continue;
+                }
+
+                log.AppendLine($"[{current.Depth}] Receive {FormatSignalItem(item)}");
+                log.AppendLine($"    Signal.StartPort: {current.StartPortId}");
+                log.AppendLine($"    Signal.StartData: {FormatSignalData(current.StartDataDefinition, current.StartDataId)}");
+                log.AppendLine($"    Signal.FromPort: {current.FromPortId}");
+                log.AppendLine($"    Signal.FromData: {FormatSignalData(current.FromDataDefinition, current.FromDataId)}");
+                log.AppendLine($"    Signal.InPort: {(string.IsNullOrWhiteSpace(current.InPortId) ? "-" : current.InPortId)}");
+
+                SignalHandlerResult handlerResult;
+                try
+                {
+                    handlerResult = RunSignalHandlerIfDefined(signalName, current, item, saveData);
+                }
+                catch (Exception ex)
+                {
+                    log.AppendLine($"    Error: Pythonシグナル処理に失敗しました。{ex.Message}");
+                    txtSignalLog.Text = log.ToString();
+                    MessageBox.Show(this, $"Pythonシグナル処理に失敗しました。\n{ex.Message}", "シグナル", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+
+                queuedMessages.AddRange(handlerResult.Messages);
+                log.AppendLine(handlerResult.HasHandler ? "    Process: Python handle_signal" : "    Process: ログのみ");
+                if (!handlerResult.ContinueSignal)
+                {
+                    log.AppendLine("    Stop: Python処理が空リストを返しました");
+                    continue;
+                }
+
+                if (current.Depth >= maxSteps)
+                {
+                    log.AppendLine("    Stop: 最大伝搬ステップに到達");
+                    continue;
+                }
+
+                if (!edges.TryGetValue(current.ItemNo, out var nextEdges) || nextEdges.Count == 0)
+                {
+                    log.AppendLine("    Stop: 接続先なし");
+                    continue;
+                }
+
+                foreach (var edge in nextEdges)
+                {
+                    if (handlerResult.OutPorts.Count > 0 && !handlerResult.OutPorts.Contains(edge.FromPortId))
+                    {
+                        continue;
+                    }
+
+                    if (current.Depth == 0 && !allPorts && edge.FromPortId != startPortId)
+                    {
+                        continue;
+                    }
+
+                    if (edge.ToItemNo == current.PreviousItemNo)
+                    {
+                        continue;
+                    }
+
+                    if (!itemsByNo.TryGetValue(edge.ToItemNo, out var nextItem))
+                    {
+                        continue;
+                    }
+
+                    if (!visited.Add(edge.ToItemNo))
+                    {
+                        log.AppendLine($"    Skip visited -> {FormatSignalItem(nextItem)} {FormatSignalPorts(edge)} ({edge.Kind})");
+                        continue;
+                    }
+
+                    string nextStartPortId = current.Depth == 0 && allPorts
+                        ? edge.FromPortId
+                        : current.StartPortId;
+                    log.AppendLine($"    Send -> {FormatSignalItem(nextItem)} {FormatSignalPorts(edge)} ({edge.Kind})");
+                    queue.Enqueue((edge.ToItemNo, current.ItemNo, current.Depth + 1, nextStartPortId, current.StartDataDefinition, current.StartDataId, edge.FromPortId, item.DataDefinitionName, item.DataId, edge.ToPortId));
+                }
+            }
+
+            txtSignalLog.Text = log.ToString();
+            if (queuedMessages.Count > 0)
+            {
+                ShowSignalMessageWindow(string.Join(Environment.NewLine, queuedMessages));
+            }
+        }
+
+        private void ShowSignalMessageWindow(string message)
+        {
+            var textBox = new TextBox
+            {
+                Text = message,
+                IsReadOnly = true,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.NoWrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Margin = new Thickness(10)
+            };
+
+            var closeButton = new Button
+            {
+                Content = "閉じる",
+                Width = 90,
+                Padding = new Thickness(8, 3, 8, 3),
+                Margin = new Thickness(10),
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+
+            var layout = new DockPanel();
+            DockPanel.SetDock(closeButton, Dock.Bottom);
+            layout.Children.Add(closeButton);
+            layout.Children.Add(textBox);
+
+            var window = new Window
+            {
+                Title = "シグナルメッセージ",
+                Owner = this,
+                Width = 640,
+                Height = 420,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Content = layout
+            };
+            closeButton.Click += (_, _) => window.Close();
+            window.ShowDialog();
+        }
+
+        private int GetSignalMaxSteps()
+        {
+            if (!int.TryParse(txtSignalMaxSteps.Text, out int maxSteps))
+            {
+                return 50;
+            }
+
+            return Math.Max(1, Math.Min(10000, maxSteps));
+        }
+
+        private string FormatSignalItem(SavedDrawingItem item)
+        {
+            string dataText = string.IsNullOrWhiteSpace(item.DataDefinitionName) || string.IsNullOrWhiteSpace(item.DataId)
+                ? "Data=-"
+                : $"Data={item.DataDefinitionName}:{item.DataId}";
+            return $"ItemNo={item.ItemNo}, Id={item.DefinitionId}, Type={item.Type}, {dataText}";
+        }
+
+        private string FormatSignalData(string dataDefinitionName, string dataId)
+        {
+            return string.IsNullOrWhiteSpace(dataDefinitionName) || string.IsNullOrWhiteSpace(dataId)
+                ? "-"
+                : $"{dataDefinitionName}:{dataId}";
+        }
+
+        private string FormatSignalPorts(SignalEdge edge)
+        {
+            string fromPort = string.IsNullOrWhiteSpace(edge.FromPortId) ? "-" : edge.FromPortId;
+            string toPort = string.IsNullOrWhiteSpace(edge.ToPortId) ? "-" : edge.ToPortId;
+            return $"[fromPort={fromPort}, toPort={toPort}]";
+        }
+
+        private SignalHandlerResult RunSignalHandlerIfDefined(
+            string signalName,
+            (int ItemNo, int PreviousItemNo, int Depth, string StartPortId, string StartDataDefinition, string StartDataId, string FromPortId, string FromDataDefinition, string FromDataId, string InPortId) current,
+            SavedDrawingItem item,
+            DrawingSaveData saveData)
+        {
+            var result = new SignalHandlerResult();
+            string code = txtSignalHandlerCode.Text;
+            if (string.IsNullOrWhiteSpace(code))
+            {
+                return result;
+            }
+
+            result.HasHandler = true;
+            var signal = new Dictionary<string, object>
+            {
+                ["name"] = signalName,
+                ["from_item_no"] = current.PreviousItemNo,
+                ["start_port"] = current.StartPortId,
+                ["start_data_definition"] = current.StartDataDefinition,
+                ["start_data_id"] = current.StartDataId,
+                ["origin_port"] = current.StartPortId,
+                ["origin_data_definition"] = current.StartDataDefinition,
+                ["origin_data_id"] = current.StartDataId,
+                ["from_port"] = current.FromPortId,
+                ["from_data_definition"] = current.FromDataDefinition,
+                ["from_data_id"] = current.FromDataId,
+                ["source_port"] = current.FromPortId,
+                ["source_data_definition"] = current.FromDataDefinition,
+                ["source_data_id"] = current.FromDataId,
+                ["to_item_no"] = current.ItemNo,
+                ["in_port"] = current.InPortId,
+                ["depth"] = current.Depth
+            };
+
+            var itemPayload = CreateSignalItemPayload(item);
+            var context = new Dictionary<string, object>
+            {
+                ["data"] = CreatePythonDataDictionary(),
+                ["tables"] = CreateCsvTablePayload(saveData)
+            };
+
+            string output = RunPythonSignalHandlerProcess(JsonSerializer.Serialize(new
+            {
+                code,
+                signal,
+                item = itemPayload,
+                context
+            }));
+
+            using var document = JsonDocument.Parse(output);
+            if (document.RootElement.TryGetProperty("messages", out var messagesElement) &&
+                messagesElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var message in messagesElement.EnumerateArray())
+                {
+                    result.Messages.Add(message.ValueKind == JsonValueKind.String ? message.GetString() ?? "" : message.ToString());
+                }
+            }
+
+            if (!document.RootElement.TryGetProperty("signals", out var signalsElement) ||
+                signalsElement.ValueKind != JsonValueKind.Array ||
+                signalsElement.GetArrayLength() == 0)
+            {
+                result.ContinueSignal = false;
+                return result;
+            }
+
+            foreach (var signalElement in signalsElement.EnumerateArray())
+            {
+                if (!signalElement.TryGetProperty("out_ports", out var outPortsElement))
+                {
+                    continue;
+                }
+
+                if (outPortsElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var portElement in outPortsElement.EnumerateArray())
+                    {
+                        string port = portElement.ValueKind == JsonValueKind.String ? portElement.GetString() ?? "" : portElement.ToString();
+                        if (!string.IsNullOrWhiteSpace(port))
+                        {
+                            result.OutPorts.Add(port);
+                        }
+                    }
+                }
+                else
+                {
+                    string port = outPortsElement.ValueKind == JsonValueKind.String ? outPortsElement.GetString() ?? "" : outPortsElement.ToString();
+                    if (!string.IsNullOrWhiteSpace(port))
+                    {
+                        result.OutPorts.Add(port);
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private Dictionary<string, object> CreateSignalItemPayload(SavedDrawingItem item)
+        {
+            return new Dictionary<string, object>
+            {
+                ["item_no"] = item.ItemNo,
+                ["definition_id"] = item.DefinitionId,
+                ["type"] = item.Type,
+                ["data_definition"] = item.DataDefinitionName,
+                ["data_id"] = item.DataId
+            };
+        }
+
+        private string RunPythonSignalHandlerProcess(string payloadJson)
+        {
+            string wrapperPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"drawingtool-signal-handler-{Guid.NewGuid():N}.py");
+            File.WriteAllText(wrapperPath, CreatePythonSignalHandlerWrapper(), new UTF8Encoding(false));
+
+            try
+            {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = "python",
+                    UseShellExecute = false,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                startInfo.ArgumentList.Add(wrapperPath);
+
+                using var process = Process.Start(startInfo)
+                    ?? throw new InvalidOperationException("Pythonプロセスを起動できませんでした。");
+
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
+                process.StandardInput.Write(payloadJson);
+                process.StandardInput.Close();
+
+                if (!process.WaitForExit(5000))
+                {
+                    process.Kill(true);
+                    throw new TimeoutException("Pythonシグナル処理が5秒以内に完了しませんでした。");
+                }
+
+                string output = outputTask.GetAwaiter().GetResult().Trim();
+                string error = errorTask.GetAwaiter().GetResult().Trim();
+                if (process.ExitCode != 0)
+                {
+                    throw new InvalidOperationException(string.IsNullOrWhiteSpace(error)
+                        ? "Pythonシグナル処理がエラー終了しました。"
+                        : error);
+                }
+
+                if (string.IsNullOrWhiteSpace(output))
+                {
+                    throw new InvalidOperationException("Pythonシグナル処理が結果を出力しませんでした。");
+                }
+
+                return output;
+            }
+            finally
+            {
+                try
+                {
+                    File.Delete(wrapperPath);
+                }
+                catch
+                {
+                    // Temporary file cleanup failure should not hide the original error.
+                }
+            }
+        }
+
+        private string CreatePythonSignalHandlerWrapper()
+        {
+            return """
+import json
+import sys
+import traceback
+
+try:
+    payload = json.loads(sys.stdin.read())
+    messages = []
+
+    def emit_message(message):
+        messages.append("" if message is None else str(message))
+
+    namespace = {"emit_message": emit_message}
+    exec(payload.get("code", ""), namespace, namespace)
+    handler = namespace.get("handle_signal")
+    if handler is None:
+        raise RuntimeError("handle_signal(signal, item, context) is not defined")
+
+    result = handler(
+        payload.get("signal", {}),
+        payload.get("item", {}),
+        payload.get("context", {})
+    )
+
+    if result is None:
+        signals = []
+    elif isinstance(result, list):
+        signals = result
+    elif isinstance(result, dict) and "signals" in result:
+        signals = result.get("signals") or []
+    else:
+        signals = [result]
+
+    print(json.dumps({"signals": signals, "messages": messages}, ensure_ascii=False))
+except Exception:
+    traceback.print_exc(file=sys.stderr)
+    sys.exit(1)
+""";
         }
 
         private void BtnLoadSelectedSymbol_Click(object sender, RoutedEventArgs e)
@@ -2496,6 +3108,12 @@ except Exception:
 
                 viewModel.TempConnectionPoints.Clear();
                 viewModel.TempConnectionPoints.AddRange(definition.ConnectionPoints);
+                viewModel.TempConnectionPointIds.Clear();
+                for (int i = 0; i < definition.ConnectionPoints.Count; i++)
+                {
+                    viewModel.TempConnectionPointIds.Add(GetConnectionPointId(definition, i));
+                }
+                txtNextPortId.Text = GetNextAvailablePortId();
                 viewModel.TempVectorElements.Clear();
                 viewModel.TempVectorElements.AddRange(definition.VectorElements.Select(CloneVectorElement));
                 viewModel.TempAttributes.Clear();
@@ -2506,7 +3124,7 @@ except Exception:
                 isLoadingSymbolDefinition = false;
             }
 
-            RightTabControl.SelectedIndex = 4;
+            RightTabControl.SelectedIndex = 5;
             RefreshEditor();
         }
 
@@ -2531,11 +3149,15 @@ except Exception:
             if (definition.Type == "Symbol")
             {
                 definition.ConnectionPoints = new List<Point>(viewModel.TempConnectionPoints);
+                definition.ConnectionPointIds = viewModel.TempConnectionPoints
+                    .Select((_, index) => GetTempConnectionPointId(index))
+                    .ToList();
                 definition.VectorElements = viewModel.TempVectorElements.Select(CloneVectorElement).ToList();
             }
             else
             {
                 definition.ConnectionPoints.Clear();
+                definition.ConnectionPointIds.Clear();
                 definition.VectorElements.Clear();
             }
         }
@@ -3074,13 +3696,20 @@ except Exception:
 
         private IEnumerable<IEnumerable<string>> CreateShapeConnectionPointCsvRows(DrawingSaveData saveData)
         {
-            yield return new[] { "DefinitionId", "PointOrder", "X", "Y" };
+            yield return new[] { "DefinitionId", "PointOrder", "PortId", "X", "Y" };
             foreach (var definition in saveData.ShapeDefinitions)
             {
                 for (int i = 0; i < definition.ConnectionPoints.Count; i++)
                 {
                     var point = definition.ConnectionPoints[i];
-                    yield return new[] { definition.Id, (i + 1).ToString(CultureInfo.InvariantCulture), CsvNumber(point.X), CsvNumber(point.Y) };
+                    yield return new[]
+                    {
+                        definition.Id,
+                        (i + 1).ToString(CultureInfo.InvariantCulture),
+                        string.IsNullOrWhiteSpace(point.Id) ? $"P{i + 1}" : point.Id,
+                        CsvNumber(point.X),
+                        CsvNumber(point.Y)
+                    };
                 }
             }
         }
@@ -3454,6 +4083,85 @@ except Exception:
             return result;
         }
 
+        private List<SignalEdge> BuildSignalEdges(DrawingSaveData saveData)
+        {
+            var itemsByNo = saveData.Items.ToDictionary(item => item.ItemNo);
+            var result = new List<SignalEdge>();
+            var emittedKeys = new HashSet<string>();
+
+            void AddUndirectedEdge(int fromItemNo, int toItemNo, string kind, string fromPortId = "", string toPortId = "")
+            {
+                if (fromItemNo == toItemNo ||
+                    !itemsByNo.ContainsKey(fromItemNo) ||
+                    !itemsByNo.ContainsKey(toItemNo))
+                {
+                    return;
+                }
+
+                AddEdge(fromItemNo, toItemNo, kind, fromPortId, toPortId);
+                AddEdge(toItemNo, fromItemNo, kind, toPortId, fromPortId);
+            }
+
+            void AddEdge(int fromItemNo, int toItemNo, string kind, string fromPortId, string toPortId)
+            {
+                string key = $"{fromItemNo}|{toItemNo}|{fromPortId}|{toPortId}|{kind}";
+                if (!emittedKeys.Add(key))
+                {
+                    return;
+                }
+
+                result.Add(new SignalEdge
+                {
+                    FromItemNo = fromItemNo,
+                    ToItemNo = toItemNo,
+                    FromPortId = fromPortId,
+                    ToPortId = toPortId,
+                    Kind = kind
+                });
+            }
+
+            foreach (var item in saveData.Items.Where(item => item.Type == "Line"))
+            {
+                if (item.StartConnection != null)
+                {
+                    AddUndirectedEdge(
+                        item.ItemNo,
+                        item.StartConnection.TargetItemNo,
+                        CreateDataLinkKind(item.StartConnection),
+                        "Start",
+                        item.StartConnection.TargetPortId);
+                }
+
+                if (item.EndConnection != null)
+                {
+                    AddUndirectedEdge(
+                        item.ItemNo,
+                        item.EndConnection.TargetItemNo,
+                        CreateDataLinkKind(item.EndConnection),
+                        "End",
+                        item.EndConnection.TargetPortId);
+                }
+            }
+
+            foreach (var node in saveData.ConnectionNodes)
+            {
+                var itemNos = node.Endpoints
+                    .Select(endpoint => endpoint.ItemNo)
+                    .Distinct()
+                    .OrderBy(itemNo => itemNo)
+                    .ToList();
+                for (int i = 0; i < itemNos.Count; i++)
+                {
+                    for (int j = i + 1; j < itemNos.Count; j++)
+                    {
+                        AddUndirectedEdge(itemNos[i], itemNos[j], "ConnectionNode");
+                    }
+                }
+            }
+
+            return result;
+        }
+
         private Dictionary<int, SavedDrawingItem> CreateLineGroupDataItemMap(
             DrawingSaveData saveData,
             Dictionary<int, SavedDrawingItem> itemsByNo)
@@ -3581,6 +4289,7 @@ except Exception:
             drawingElementAttributes.Clear();
             drawingElementDataReferences.Clear();
             lineGroupDataReferences.Clear();
+            savedSignalSettings.Clear();
             selectedLineGroupKey = "";
 
             foreach (var element in DrawCanvas.Children.OfType<UIElement>().Where(IsSavedDrawingElement).ToList())
@@ -3620,7 +4329,37 @@ except Exception:
             }
 
             rbSelect.IsChecked = true;
+            LoadSignalSettings(saveData.SignalSettings);
+            savedSignalSettings.AddRange(saveData.SignalSettingsList.Select(CloneSignalSettings));
+            lstSavedSignals.Items.Refresh();
             RefreshPlacedSymbols();
+        }
+
+        private void LoadSignalSettings(SavedSignalSettings settings)
+        {
+            txtSignalName.Text = string.IsNullOrWhiteSpace(settings.SignalName)
+                ? "signal"
+                : settings.SignalName;
+            chkSignalAllPorts.IsChecked = settings.SendFromAllPorts;
+            txtSignalMaxSteps.Text = Math.Max(1, settings.MaxSteps).ToString(CultureInfo.InvariantCulture);
+            if (!string.IsNullOrWhiteSpace(settings.HandlerCode))
+            {
+                txtSignalHandlerCode.Text = settings.HandlerCode;
+            }
+
+            cmbSignalStartPort.Text = settings.StartPortId;
+        }
+
+        private SavedSignalSettings CloneSignalSettings(SavedSignalSettings settings)
+        {
+            return new SavedSignalSettings
+            {
+                SignalName = settings.SignalName,
+                SendFromAllPorts = settings.SendFromAllPorts,
+                StartPortId = settings.StartPortId,
+                MaxSteps = settings.MaxSteps,
+                HandlerCode = settings.HandlerCode
+            };
         }
 
         private ShapeDefinition CreateShapeDefinition(SavedShapeDefinition savedDefinition)
@@ -3645,6 +4384,9 @@ except Exception:
                 AutoCreateLineGroupData = savedDefinition.AutoCreateLineGroupData,
                 ConnectionPoints = savedDefinition.ConnectionPoints
                     .Select(point => new Point(point.X, point.Y))
+                    .ToList(),
+                ConnectionPointIds = savedDefinition.ConnectionPoints
+                    .Select((point, index) => string.IsNullOrWhiteSpace(point.Id) ? $"P{index + 1}" : point.Id)
                     .ToList(),
                 VectorElements = savedDefinition.VectorElements
                     .Select(CreateVectorElement)
@@ -3861,19 +4603,34 @@ except Exception:
                 AddVectorElementToCanvas(symbol, vectorElement, 0, Brushes.Black, 2, 1);
             }
 
-            foreach (var connectionPoint in definition.ConnectionPoints)
+            for (int i = 0; i < definition.ConnectionPoints.Count; i++)
             {
+                var connectionPoint = definition.ConnectionPoints[i];
+                string portId = GetConnectionPointId(definition, i);
                 var dot = new Ellipse
                 {
                     Width = 6,
                     Height = 6,
                     Fill = Brushes.Blue,
                     Stroke = Brushes.White,
-                    StrokeThickness = 1
+                    StrokeThickness = 1,
+                    ToolTip = portId
                 };
                 Canvas.SetLeft(dot, connectionPoint.X - 3);
                 Canvas.SetTop(dot, connectionPoint.Y - 3);
                 symbol.Children.Add(dot);
+                var label = new TextBlock
+                {
+                    Text = portId,
+                    FontSize = 9,
+                    Foreground = Brushes.DarkBlue,
+                    Background = Brushes.White,
+                    Opacity = 0.85,
+                    IsHitTestVisible = false
+                };
+                Canvas.SetLeft(label, connectionPoint.X + 4);
+                Canvas.SetTop(label, connectionPoint.Y - 8);
+                symbol.Children.Add(label);
             }
         }
 
@@ -4027,6 +4784,11 @@ except Exception:
             var itemNumbers = new Dictionary<UIElement, int>();
             var nodeNumbers = new Dictionary<ConnectionNode, int>();
 
+            saveData.SignalSettings = CreateSavedSignalSettings();
+            saveData.SignalSettingsList = savedSignalSettings
+                .Select(CloneSignalSettings)
+                .ToList();
+
             int itemNo = 1;
             foreach (UIElement element in DrawCanvas.Children)
             {
@@ -4057,7 +4819,12 @@ except Exception:
                     LineGroupDataDefinitionName = definition.LineGroupDataDefinitionName,
                     AutoCreateLineGroupData = definition.AutoCreateLineGroupData,
                     ConnectionPoints = definition.ConnectionPoints
-                        .Select(point => new SavedPoint { X = point.X, Y = point.Y })
+                        .Select((point, index) => new SavedPoint
+                        {
+                            Id = GetConnectionPointId(definition, index),
+                            X = point.X,
+                            Y = point.Y
+                        })
                         .ToList(),
                     VectorElements = definition.VectorElements
                         .Select(CreateSavedVectorElement)
@@ -4144,6 +4911,18 @@ except Exception:
             }
 
             return saveData;
+        }
+
+        private SavedSignalSettings CreateSavedSignalSettings()
+        {
+            return new SavedSignalSettings
+            {
+                SignalName = string.IsNullOrWhiteSpace(txtSignalName.Text) ? "signal" : txtSignalName.Text.Trim(),
+                SendFromAllPorts = chkSignalAllPorts.IsChecked == true,
+                StartPortId = cmbSignalStartPort.Text.Trim(),
+                MaxSteps = GetSignalMaxSteps(),
+                HandlerCode = txtSignalHandlerCode.Text
+            };
         }
 
         private bool IsSavedDrawingElement(UIElement element)
@@ -4368,8 +5147,35 @@ except Exception:
                 TargetKind = targetElement is Line ? "Line" : "Symbol",
                 RelativeX = relativePoint.X,
                 RelativeY = relativePoint.Y,
-                LineRatio = lineRatio
+                LineRatio = lineRatio,
+                TargetPortId = GetConnectedPortId(targetElement, relativePoint)
             };
+        }
+
+        private string GetConnectedPortId(UIElement targetElement, Point relativePoint)
+        {
+            if (targetElement is not FrameworkElement frameworkElement ||
+                frameworkElement.Tag is not ShapeDefinition definition ||
+                definition.Type != "Symbol" ||
+                definition.ConnectionPoints.Count == 0)
+            {
+                return "";
+            }
+
+            int bestIndex = -1;
+            double bestDistance = double.MaxValue;
+            for (int i = 0; i < definition.ConnectionPoints.Count; i++)
+            {
+                var point = definition.ConnectionPoints[i];
+                double distance = Math.Pow(point.X - relativePoint.X, 2) + Math.Pow(point.Y - relativePoint.Y, 2);
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    bestIndex = i;
+                }
+            }
+
+            return bestIndex >= 0 ? GetConnectionPointId(definition, bestIndex) : "";
         }
 
         // ★スナップ判定：WireA / WireB / WireC でターゲットの許可条件を変える

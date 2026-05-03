@@ -151,6 +151,95 @@
                 </Grid>
             </TabItem>
 
+            <TabItem Header="シグナル">
+                <Grid Margin="5">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="110"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Margin="0,0,0,8">
+                        <TextBlock Text="開始図形:" FontWeight="Bold" Margin="0,0,0,3"/>
+                        <ComboBox Name="cmbSignalStartItem"
+                                  ItemsSource="{Binding PlacedSymbols}"
+                                  DisplayMemberPath="DisplayText"
+                                  SelectionChanged="CmbSignalStartItem_SelectionChanged"
+                                  Padding="2"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="1" Margin="0,0,0,8">
+                        <TextBlock Text="シグナル名:" Margin="0,0,0,3"/>
+                        <TextBox Name="txtSignalName" Text="signal" Padding="2" Margin="0,0,0,5"/>
+                        <CheckBox Name="chkSignalAllPorts"
+                                  Content="全てのポートから発信する"
+                                  IsChecked="True"
+                                  Margin="0,0,0,5"/>
+                        <TextBlock Text="発信ポートID:" Margin="0,0,0,3"/>
+                        <ComboBox Name="cmbSignalStartPort"
+                                  IsEditable="True"
+                                  Padding="2"
+                                  Margin="0,0,0,5"/>
+                        <TextBlock Text="最大伝搬ステップ:" Margin="0,0,0,3"/>
+                        <TextBox Name="txtSignalMaxSteps" Text="50" Padding="2"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,8">
+                        <Button Content="選択中図形から送信"
+                                Click="BtnRunSignalFromSelected_Click"
+                                Padding="6,2"
+                                Margin="0,0,6,0"/>
+                        <Button Content="開始図形から送信"
+                                Click="BtnRunSignalFromList_Click"
+                                Padding="6,2"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,8">
+                        <Button Content="シグナルを保存"
+                                Click="BtnSaveSignalSettings_Click"
+                                Padding="6,2"
+                                Margin="0,0,6,0"/>
+                        <Button Content="選択シグナルを読込"
+                                Click="BtnLoadSignalSettings_Click"
+                                Padding="6,2"
+                                Margin="0,0,6,0"/>
+                        <Button Content="選択シグナルを削除"
+                                Click="BtnDeleteSignalSettings_Click"
+                                Padding="6,2"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="4" Margin="0,0,0,8">
+                        <TextBlock Text="シグナルリスト:" FontWeight="Bold" Margin="0,0,0,3"/>
+                        <ListBox Name="lstSavedSignals"
+                                 DisplayMemberPath="DisplayText"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="5" Margin="0,0,0,8">
+                        <TextBlock Text="受信側Python処理:" FontWeight="Bold" Margin="0,0,0,3"/>
+                        <TextBox Name="txtSignalHandlerCode"
+                                 Height="110"
+                                 AcceptsReturn="True"
+                                 AcceptsTab="True"
+                                 TextWrapping="NoWrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 Text="def handle_signal(signal, item, context):&#x0a;    emit_message(f&quot;{item.get('definition_id', '')} が {signal.get('name', '')} を受信&quot;)&#x0a;    return [signal]"/>
+                    </StackPanel>
+
+                    <TextBox Grid.Row="6"
+                             Name="txtSignalLog"
+                             IsReadOnly="True"
+                             AcceptsReturn="True"
+                             TextWrapping="NoWrap"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto"/>
+                </Grid>
+            </TabItem>
+
             <TabItem Header="CSV一覧">
                 <Grid Margin="5">
                     <Grid.RowDefinitions>
@@ -236,6 +325,10 @@
                                 <RadioButton Name="rbEditorVector" Content="ベクター描画" Margin="0,0,10,0"/>
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
+                                <TextBlock Text="次のポートID:" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                <TextBox Name="txtNextPortId" Text="P1" Width="80" Padding="2"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
                                 <ComboBox Name="cmbVectorShape" SelectedIndex="0" Width="90" Padding="2">
                                     <ComboBoxItem Content="線" Tag="Line"/>
                                     <ComboBoxItem Content="四角" Tag="Rectangle"/>
@@ -252,7 +345,7 @@
                                         MouseMove="EditorCanvas_MouseMove"
                                         MouseLeftButtonUp="EditorCanvas_MouseLeftButtonUp"/>
                             </Border>
-                            <TextBlock Text="※接続点: クリックで追加/削除。ベクター: ドラッグで線・四角・楕円を描画。" FontSize="10" Margin="0,5,0,15" Foreground="Gray" TextWrapping="Wrap"/>
+                            <TextBlock Text="※接続点: クリックで追加/削除。追加時は「次のポートID」を使用。ベクター: ドラッグで線・四角・楕円を描画。" FontSize="10" Margin="0,5,0,15" Foreground="Gray" TextWrapping="Wrap"/>
                         </StackPanel>
 
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,10">

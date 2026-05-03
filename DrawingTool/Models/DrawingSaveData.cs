@@ -11,6 +11,19 @@ namespace DrawingTool.Models
         public List<SavedDrawingItem> Items { get; set; } = new List<SavedDrawingItem>();
         public List<SavedLineGroup> LineGroups { get; set; } = new List<SavedLineGroup>();
         public List<SavedConnectionNode> ConnectionNodes { get; set; } = new List<SavedConnectionNode>();
+        public SavedSignalSettings SignalSettings { get; set; } = new SavedSignalSettings();
+        public List<SavedSignalSettings> SignalSettingsList { get; set; } = new List<SavedSignalSettings>();
+    }
+
+    public class SavedSignalSettings
+    {
+        public string SignalName { get; set; } = "signal";
+        public bool SendFromAllPorts { get; set; } = true;
+        public string StartPortId { get; set; } = "";
+        public int MaxSteps { get; set; } = 50;
+        public string HandlerCode { get; set; } = "";
+
+        public string DisplayText => $"{SignalName} ({(SendFromAllPorts ? "ALL" : StartPortId)}, Max={MaxSteps})";
     }
 
     public class SavedDataDefinition
@@ -108,6 +121,7 @@ namespace DrawingTool.Models
         public double RelativeX { get; set; }
         public double RelativeY { get; set; }
         public double LineRatio { get; set; }
+        public string TargetPortId { get; set; } = "";
     }
 
     public class SavedConnectionNode
@@ -126,6 +140,7 @@ namespace DrawingTool.Models
 
     public class SavedPoint
     {
+        public string Id { get; set; } = "";
         public double X { get; set; }
         public double Y { get; set; }
     }

@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("DrawingTool")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+26a4ca9e7992eb44b9130ef87471bab5ba4d6e3d")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+cf31a7f2735015b1407cae0e9bda99f8b134bd9c")]
 [assembly: System.Reflection.AssemblyProductAttribute("DrawingTool")]
 [assembly: System.Reflection.AssemblyTitleAttribute("DrawingTool")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
